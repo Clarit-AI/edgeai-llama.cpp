@@ -139,11 +139,29 @@ const std::vector<std::string>* Rknpu2DeviceConfig::get_active_pattern(int tenso
     if (it == default_patterns.end()) {
         return nullptr;
     }
-    
+
     if (use_custom_pattern && !custom_hybrid_pattern.empty()) {
-        return &custom_hybrid_pattern;
+        // Validate that at least one pipeline in custom_hybrid_pattern is compatible
+        // with the allowed pipelines for this tensor type
+        const auto& allowed_pipelines = it->second;
+        bool has_compatible_pipeline = false;
+
+        for (const auto& custom_pipeline : custom_hybrid_pattern) {
+            for (const auto& allowed_pipeline : allowed_pipelines) {
+                if (custom_pipeline == allowed_pipeline) {
+                    has_compatible_pipeline = true;
+                    break;
+                }
+            }
+            if (has_compatible_pipeline) break;
+        }
+
+        // Only use custom pattern if at least one pipeline is compatible
+        if (has_compatible_pipeline) {
+            return &custom_hybrid_pattern;
+        }
     }
-    
+
     return &it->second;
 }
 
@@ -307,9 +325,19 @@ Rknpu2ConfigManager::Rknpu2ConfigManager() {
     // ... fill config for RK3566 ...
     // device_configs["RK3566"] = rk3566_config;
 
-    // Select a default device
+    // Select a default device with explicit deterministic fallback order
     if (!device_configs.empty()) {
-        select_device(device_configs.begin()->first);
+        // Prefer RK3588, then RK3588S, then RK3576, otherwise first available
+        if (device_configs.find("RK3588") != device_configs.end()) {
+            select_device("RK3588");
+        } else if (device_configs.find("RK3588S") != device_configs.end()) {
+            select_device("RK3588S");
+        } else if (device_configs.find("RK3576") != device_configs.end()) {
+            select_device("RK3576");
+        } else {
+            // Fall back to first available device
+            select_device(device_configs.begin()->first);
+        }
     }
 }
 
