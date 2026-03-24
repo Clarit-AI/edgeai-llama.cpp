@@ -319,6 +319,20 @@ class GGUFWriter:
             return
         self.add_key_value(key, val, GGUFValueType.ARRAY)
 
+    def add_thinking_token_aliases(self, aliases: dict[str, list[int]]) -> None:
+        """Add thinking token alias mappings (canonical name -> token ID sequence).
+
+        This allows universal thinking tags like <think>/
+</think> to map to model-specific
+        thinking tokens like ◁think▷/◁/think▷.
+
+        Args:
+            aliases: dict mapping canonical token text (e.g., "<think>") to a list of
+                    token IDs that represent the model's actual thinking token(s).
+        """
+        import json
+        self.add_string(gguf.GGUFKeys.Tokenizer.THINKING_TOKEN_ALIAS, json.dumps(aliases))
+
     @staticmethod
     def ggml_pad(x: int, n: int) -> int:
         return ((x + n - 1) // n) * n

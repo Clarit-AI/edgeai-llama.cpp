@@ -1547,6 +1547,9 @@ struct llama_vocab::impl {
 
     int max_token_len = 0; // used for optimizing longest token search
 
+    // thinking token aliases: maps canonical names (e.g., "<think>") to model-specific tokens
+    std::unordered_map<std::string, llama_token> token_alias;
+
     // default LLaMA special tokens
     // TODO: should we set all of these to LLAMA_TOKEN_NULL?
     llama_token special_bos_id  = 1;
@@ -2092,6 +2095,77 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
     }
     GGML_ASSERT(id_to_token.size() == token_to_id.size());
 
+    // Load thinking token aliases from GGUF metadata
+    // Format: {"<think>": [1, 2], "</think>": [3, 4]}
+    // This allows universal thinking tags like <think>/</think> to map to model-specific tokens
+    {
+        const int alias_keyidx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_THINKING_TOKEN_ALIAS).c_str());
+        if (alias_keyidx >= 0) {
+            const char * alias_str = gguf_get_val_str(ctx, alias_keyidx);
+            if (alias_str && alias_str[0] != '\0') {
+                std::string json_str = alias_str;
+
+                // Helper to extract integer array from JSON string
+                // Finds pattern: "key": [ints]
+                auto parse_aliases = [](const std::string & s) -> std::unordered_map<std::string, std::vector<llama_token>> {
+                    std::unordered_map<std::string, std::vector<llama_token>> result;
+                    size_t pos = 0;
+
+                    while (pos < s.size()) {
+                        // Find opening quote for key
+                        size_t key_start = s.find('"', pos);
+                        if (key_start == std::string::npos) break;
+                        size_t key_end = s.find('"', key_start + 1);
+                        if (key_end == std::string::npos) break;
+
+                        std::string key = s.substr(key_start + 1, key_end - key_start - 1);
+
+                        // Find opening bracket after key
+                        size_t arr_start = s.find('[', key_end);
+                        if (arr_start == std::string::npos) break;
+                        size_t arr_end = s.find(']', arr_start);
+                        if (arr_end == std::string::npos) break;
+
+                        // Extract integers from array
+                        std::vector<llama_token> tokens;
+                        size_t num_start = arr_start + 1;
+                        while (num_start < arr_end) {
+                            // Skip whitespace and comma
+                            while (num_start < arr_end && (s[num_start] == ' ' || s[num_start] == '\t' || s[num_start] == ',')) {
+                                num_start++;
+                            }
+                            if (num_start >= arr_end) break;
+
+                            // Parse number
+                            char * endptr = nullptr;
+                            int64_t val = strtol(s.c_str() + num_start, &endptr, 10);
+                            if (endptr == s.c_str() + num_start) break;
+                            tokens.push_back(static_cast<llama_token>(val));
+                            num_start = endptr - s.c_str();
+                        }
+
+                        if (!tokens.empty()) {
+                            result[key] = tokens;
+                        }
+
+                        pos = arr_end + 1;
+                    }
+
+                    return result;
+                };
+
+                auto aliases = parse_aliases(json_str);
+                for (const auto & kv_pair : aliases) {
+                    // For now, take the first token ID (assume single-token thinking markers)
+                    if (!kv_pair.second.empty()) {
+                        token_alias[kv_pair.first] = kv_pair.second[0];
+                        LLAMA_LOG_INFO("%s: thinking token alias '%s' -> token %d\n", __func__, kv_pair.first.c_str(), kv_pair.second[0]);
+                    }
+                }
+            }
+        }
+    }
+
     init_tokenizer(type);
 
     // determine the newline token: LLaMA "<0x0A>" == 10 == '\n', Falcon 193 == '\n'
@@ -2636,6 +2710,83 @@ void llama_vocab::impl::init_tokenizer(enum llama_vocab_type type) {
 // #define PRETOKENIZERDEBUG
 
 void llama_vocab::impl::tokenizer_st_partition(std::forward_list<fragment_buffer_variant> & buffer, bool parse_special) const {
+    // first, handle thinking token aliases: <think> -> model's think token (e.g., ◁think▷)
+    // this allows universal thinking markers to work with model-specific tokens
+    if (parse_special && !token_alias.empty()) {
+        for (const auto & alias_pair : token_alias) {
+            const std::string & alias_text = alias_pair.first;
+            const llama_token alias_token = alias_pair.second;
+
+            // for each text fragment
+            std::forward_list<fragment_buffer_variant>::iterator it = buffer.begin();
+            while (it != buffer.end()) {
+                auto & fragment = (*it);
+
+                // if a fragment is text (not yet processed)
+                if (fragment.type == FRAGMENT_BUFFER_VARIANT_TYPE_RAW_TEXT) {
+                    const auto & raw_text = fragment.raw_text;
+
+                    auto raw_text_base_offset = fragment.offset;
+                    auto raw_text_base_length = fragment.length;
+
+                    // loop over the text
+                    while (true) {
+                        // find the first occurrence of the alias text in this fragment
+                        auto match = std::string_view(raw_text.data(), raw_text_base_offset + raw_text_base_length).find(alias_text, raw_text_base_offset);
+
+                        // no occurrences found, stop processing this fragment for this alias
+                        if (match == std::string::npos) break;
+
+                        auto source = std::distance(buffer.begin(), it);
+
+                        // if match is further than base offset, we have text to the left
+                        if (match > raw_text_base_offset) {
+                            int64_t left_reminder_offset = raw_text_base_offset + 0;
+                            int64_t left_reminder_length = match - raw_text_base_offset;
+
+                            if (left_reminder_length > 0) {
+                                buffer.emplace_after(it, raw_text, left_reminder_offset, left_reminder_length);
+                                it++;
+                            }
+                        }
+
+                        // emit alias token
+                        buffer.emplace_after(it, alias_token);
+                        it++;
+
+                        // right side
+                        if (match + alias_text.length() < raw_text_base_offset + raw_text_base_length) {
+                            int64_t right_reminder_offset = match + alias_text.length();
+                            int64_t right_reminder_length = raw_text_base_length - ((match - raw_text_base_offset) + alias_text.length());
+
+                            if (right_reminder_length > 0) {
+                                buffer.emplace_after(it, raw_text, right_reminder_offset, right_reminder_length);
+                                it++;
+                            }
+
+                            if (source == 0) {
+                                buffer.erase_after(buffer.before_begin());
+                            } else {
+                                buffer.erase_after(std::next(buffer.begin(), (source - 1)));
+                            }
+
+                            raw_text_base_offset = right_reminder_offset;
+                            raw_text_base_length = right_reminder_length;
+                        } else {
+                            if (source == 0) {
+                                buffer.erase_after(buffer.before_begin());
+                            } else {
+                                buffer.erase_after(std::next(buffer.begin(), (source - 1)));
+                            }
+                            break;
+                        }
+                    }
+                }
+                it++;
+            }
+        }
+    }
+
     // for each special token
     for (const llama_token special_id : cache_special_tokens) {
         const auto & data = vocab.get_token_data(special_id);
@@ -3346,6 +3497,11 @@ llama_token llama_vocab::byte_to_token(uint8_t ch) const {
 
 llama_token llama_vocab::text_to_token(const std::string & text) const {
     GGML_ASSERT(pimpl->type != LLAMA_VOCAB_TYPE_NONE);
+    // check alias map first (e.g., <think> -> model's think token)
+    auto alias_it = pimpl->token_alias.find(text);
+    if (alias_it != pimpl->token_alias.end()) {
+        return alias_it->second;
+    }
     auto it = pimpl->token_to_id.find(text);
     if (it != pimpl->token_to_id.end()) {
         return (*it).second;
@@ -3438,6 +3594,25 @@ llama_token llama_vocab::token_fim_rep() const {
 
 llama_token llama_vocab::token_fim_sep() const {
     return pimpl->special_fim_sep_id;
+}
+
+std::string llama_vocab::get_thinking_token_alias_json() const {
+    if (pimpl->token_alias.empty()) {
+        return "{}";
+    }
+
+    // Build JSON manually to avoid adding json dependency to this file
+    std::string json = "{";
+    bool first = true;
+    for (const auto & kv : pimpl->token_alias) {
+        if (!first) {
+            json += ",";
+        }
+        first = false;
+        json += "\"" + kv.first + "\":[" + std::to_string(static_cast<int>(kv.second)) + "]";
+    }
+    json += "}";
+    return json;
 }
 
 llama_token llama_vocab::token_mask() const {

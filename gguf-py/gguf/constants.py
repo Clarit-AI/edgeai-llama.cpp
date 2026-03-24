@@ -175,6 +175,7 @@ class Keys:
         FIM_PAD_ID           = "tokenizer.ggml.fim_pad_token_id"
         FIM_REP_ID           = "tokenizer.ggml.fim_rep_token_id"
         FIM_SEP_ID           = "tokenizer.ggml.fim_sep_token_id"
+        THINKING_TOKEN_ALIAS = "tokenizer.ggml.thinking_token_alias"
         # FIM/Infill special tokens constants
         PREFIX_ID            = "tokenizer.ggml.prefix_token_id"
         SUFFIX_ID            = "tokenizer.ggml.suffix_token_id"
@@ -1849,6 +1850,7 @@ KEY_TOKENIZER_FIM_MID_ID = Keys.Tokenizer.FIM_MID_ID
 KEY_TOKENIZER_FIM_PAD_ID = Keys.Tokenizer.FIM_PAD_ID
 KEY_TOKENIZER_FIM_REP_ID = Keys.Tokenizer.FIM_REP_ID
 KEY_TOKENIZER_FIM_SEP_ID = Keys.Tokenizer.FIM_SEP_ID
+KEY_TOKENIZER_THINKING_TOKEN_ALIAS = Keys.Tokenizer.THINKING_TOKEN_ALIAS
 
 KEY_TOKENIZER_PREFIX_ID  = Keys.Tokenizer.PREFIX_ID
 KEY_TOKENIZER_SUFFIX_ID  = Keys.Tokenizer.SUFFIX_ID

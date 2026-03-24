@@ -119,6 +119,8 @@ struct llama_vocab {
     llama_token token_fim_rep() const;
     llama_token token_fim_sep() const;
 
+    std::string get_thinking_token_alias_json() const;
+
     bool get_add_space_prefix          () const;
     bool get_add_bos                   () const;
     bool get_add_eos                   () const;
