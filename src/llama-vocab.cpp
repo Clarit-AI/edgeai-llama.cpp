@@ -2160,14 +2160,14 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                     if (kv_pair.second.size() != 1) {
                         LLAMA_LOG_ERROR("%s: invalid thinking token alias '%s': expected exactly 1 token ID, got %zu\n",
                             __func__, kv_pair.first.c_str(), kv_pair.second.size());
-                        return false;
+                        throw std::runtime_error("invalid thinking token alias '" + kv_pair.first + "': expected exactly 1 token ID, got " + std::to_string(kv_pair.second.size()));
                     }
                     const llama_token id = kv_pair.second[0];
                     // Validate: token ID must be in valid range
                     if (id < 0 || id >= (llama_token)id_to_token.size()) {
                         LLAMA_LOG_ERROR("%s: invalid thinking token alias '%s': token ID %d out of range [0, %zu)\n",
                             __func__, kv_pair.first.c_str(), id, id_to_token.size());
-                        return false;
+                        throw std::runtime_error("invalid thinking token alias '" + kv_pair.first + "': token ID " + std::to_string(id) + " out of range [0, " + std::to_string(id_to_token.size()) + ")");
                     }
                     token_alias[kv_pair.first] = id;
                     LLAMA_LOG_INFO("%s: thinking token alias '%s' -> token %d\n", __func__, kv_pair.first.c_str(), id);
