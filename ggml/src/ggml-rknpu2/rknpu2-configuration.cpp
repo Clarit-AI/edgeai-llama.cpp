@@ -286,10 +286,21 @@ Rknpu2ConfigManager::Rknpu2ConfigManager() {
 
     device_configs["RK3588"] = rk3588_config;
 
-    // --- Define RK3576 Configuration (Placeholder) ---
-    // Rknpu2DeviceConfig rk3576_config;
-    // ... fill config for RK3576 ...
-    // device_configs["RK3576"] = rk3576_config;
+    // --- Define RK3588S Configuration ---
+    // RK3588S is a variant with 2 NPU cores (vs 3 on RK3588)
+    // Uses the same pipelines as RK3588
+    Rknpu2DeviceConfig rk3588s_config = rk3588_config;  // Copy from RK3588
+    rk3588s_config.device_name = "RK3588S";
+    rk3588s_config.core_count = 2;
+    device_configs["RK3588S"] = rk3588s_config;
+
+    // --- Define RK3576 Configuration ---
+    // RK3576 has 3 NPU cores, same architecture as RK3588
+    // Uses the same pipelines as RK3588
+    Rknpu2DeviceConfig rk3576_config = rk3588_config;  // Copy from RK3588
+    rk3576_config.device_name = "RK3576";
+    rk3576_config.core_count = 3;
+    device_configs["RK3576"] = rk3576_config;
 
     // --- Define RK3566 Configuration (Placeholder) ---
     // Rknpu2DeviceConfig rk3566_config;
