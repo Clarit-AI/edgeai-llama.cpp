@@ -86,14 +86,9 @@ def main():
             else:
                 tokens.append(str(token))
     elif hasattr(tokens_data, 'data') and hasattr(tokens_data, 'parts'):
-        # Fallback: use data indices to extract real tokens from parts
-        tokens = []
-        for idx in tokens_data.data:
-            part = tokens_data.parts[idx]
-            if isinstance(part, bytes):
-                tokens.append(part.decode('utf-8', errors='replace'))
-            else:
-                tokens.append(str(part))
+        # Fallback: use data indices to extract real tokens from parts.
+        # parts elements are numpy ndarrays, so convert via bytes() first.
+        tokens = [str(bytes(tokens_data.parts[idx]), encoding='utf-8', errors='replace') for idx in tokens_data.data]
     else:
         tokens = [tokens_data]
 
