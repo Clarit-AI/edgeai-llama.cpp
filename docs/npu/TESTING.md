@@ -165,11 +165,34 @@ HYBRID_PATTERN=FP16_STANDARD,INT8_STANDARD \
 
 **Pass criteria:** Completes successfully with mixed precision
 
+### Test 9: Manifest-Driven Route Override
+
+```bash
+HYBRID_MANIFEST=/path/to/model.gguf.hybrid.json \
+HYBRID_PROFILE=balanced \
+HYBRID_DUMP_PLAN=1 \
+    ./build/bin/llama-cli -m model.gguf -p "Test" --n-gpu-layers 99
+```
+
+**Expected:** manifest routes take precedence over legacy `HYBRID_PATTERN` decisions when a rule matches.
+**Pass criteria:** logs show the manifest path/profile and at least one resolved route summary when the manifest matches a tensor.
+
+### Test 10: Strict Manifest Validation
+
+```bash
+HYBRID_MANIFEST=/path/to/bad.hybrid.json \
+HYBRID_STRICT=1 \
+    ./build/bin/llama-cli -m model.gguf -p "Test" --n-gpu-layers 99
+```
+
+**Expected:** invalid manifest rules fail fast instead of silently falling back.
+**Pass criteria:** process exits non-zero and the error names the bad rule or pipeline.
+
 ---
 
 ## Stress Tests
 
-### Test 9: Extended Generation
+### Test 11: Extended Generation
 
 ```bash
 # Long generation to test stability
@@ -182,7 +205,7 @@ HYBRID_PATTERN=FP16_STANDARD,INT8_STANDARD \
 
 **Pass criteria:** Completes 500 tokens without crash or corruption
 
-### Test 10: Repeated Inference
+### Test 12: Repeated Inference
 
 ```bash
 for i in {1..10}; do
@@ -206,6 +229,9 @@ done
 # Check backend selection
 --dry-run -v
 
+# Show manifest-driven plan summary from the backend layer
+HYBRID_MANIFEST=/path/to/model.gguf.hybrid.json HYBRID_DUMP_PLAN=1 -v
+
 # Capture full log
 ./build/bin/llama-cli -m model.gguf -p "Test" --n-gpu-layers 99 2>&1 | tee run.log
 ```
@@ -218,6 +244,7 @@ done
 | "IOVA exhaustion" | CMA too small | Increase `cma=1024M` in cmdline |
 | Slow on IQK | Expected - CPU only | Use FP16/INT8/Q8_0 for NPU |
 | Garbled output | Vision model issue | Check mrope embedding format |
+| Manifest ignored | No matching rule or bad env path | Check `HYBRID_MANIFEST`, `HYBRID_PROFILE`, and `HYBRID_STRICT` |
 
 ---
 

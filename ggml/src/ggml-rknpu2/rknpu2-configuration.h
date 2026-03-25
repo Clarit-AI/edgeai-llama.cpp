@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <mutex>
 #include <memory>
+#include <regex>
 
 namespace rknpu2_configuration {
 
@@ -71,6 +72,41 @@ struct Rknpu2HardwarePipeline {
 };
 
 /**
+ * @brief Describes one manifest rule resolved against a tensor name.
+ *
+ * The backend reads hybrid policy from environment variables in this slice,
+ * so the resolved route is cached on demand here rather than in the loader.
+ */
+struct Rknpu2HybridRoute {
+    bool from_manifest = false;
+    bool from_loader = false;
+    bool force_cpu = false;
+    bool valid = false;
+    bool strict = false;
+
+    int layer_id = -1;
+    std::string role;
+    std::string rule_name;
+    std::string fallback_reason;
+    std::string pipeline_name;
+
+    const Rknpu2HardwarePipeline * pipeline = nullptr;
+};
+
+struct Rknpu2HybridRule {
+    std::string name;
+    std::regex match;
+    bool force_cpu = false;
+    bool required = false;
+    bool has_layer_range = false;
+    int layer_begin = -1;
+    int layer_end = -1;
+    std::string role;
+    std::string pipeline_name;
+    std::vector<std::string> source_quant_allow;
+};
+
+/**
  * @brief Holds the complete hardware configuration for a specific Rockchip NPU.
  *
  * This includes the device name, number of available NPU cores, and a list of
@@ -93,11 +129,39 @@ struct Rknpu2DeviceConfig {
     mutable std::unordered_map<std::string, int> tensor_sequence_map;
     mutable int global_tensor_counter = 0;
 
+    // Env-driven hybrid manifest support. This is intentionally backend-local in
+    // this slice so it can be exercised without loader/common changes.
+    bool hybrid_manifest_loaded = false;
+    bool hybrid_manifest_strict = false;
+    bool hybrid_manifest_dump_plan = false;
+    std::string hybrid_manifest_path;
+    std::string hybrid_manifest_profile = "default";
+    std::string hybrid_manifest_default_policy = "legacy";
+    std::vector<Rknpu2HybridRule> hybrid_manifest_rules;
+    mutable std::map<std::string, Rknpu2HybridRoute> hybrid_route_cache;
+    mutable std::map<std::string, Rknpu2HybridRoute> explicit_route_cache;
+
     /**
      * @brief Resolves the appropriate hardware pipeline for a given tensor.
      * Applies layer-by-layer cyclical selection if the active pattern has multiple entries.
      */
     const Rknpu2HardwarePipeline* resolve_op_support(const struct ggml_tensor* w_tensor) const;
+
+    /**
+     * @brief Dumps a concise manifest summary if one is active.
+     */
+    void dump_hybrid_manifest_summary() const;
+
+    /**
+     * @brief Resolves an explicit manifest route, if any, for a tensor.
+     *
+     * This is intentionally exposed so the backend op support check can apply
+     * strict manifest behavior before falling back to legacy patterns.
+     */
+    const Rknpu2HybridRoute* resolve_manifest_route(const struct ggml_tensor * w_tensor) const;
+    const Rknpu2HybridRoute* resolve_explicit_route(const struct ggml_tensor * w_tensor) const;
+    void clear_explicit_routes() const;
+    void register_explicit_route(const std::string & tensor_name, const std::string & pipeline_name, bool strict) const;
 
 private:
     /**
@@ -105,6 +169,11 @@ private:
      * Prioritizes custom ENV variable pattern over default mapping.
      */
     const std::vector<std::string>* get_active_pattern(int tensor_type) const;
+
+    /**
+     * @brief Returns a pipeline pointer by name.
+     */
+    const Rknpu2HardwarePipeline* find_pipeline(const std::string & name) const;
 };
 
 /**
@@ -146,6 +215,8 @@ public:
      * @param factor The split factor value to set.
      */
     void set_split_factor_internal(int factor) { split_factor = factor; }
+    void clear_explicit_routes();
+    void register_explicit_route(const std::string & tensor_name, const std::string & pipeline_name, bool strict);
 
 private:
     // Private constructor, destructor, and copy operators to enforce singleton pattern

@@ -12,11 +12,35 @@
 #endif
 
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
+
+static std::string get_env_string(const char * name) {
+    const char * value = std::getenv(name);
+    return value == nullptr ? std::string() : std::string(value);
+}
+
+static std::string json_escape(const std::string & value) {
+    std::string escaped;
+    escaped.reserve(value.size());
+    for (char c : value) {
+        if (c == '"' || c == '\\') {
+            escaped += '\\';
+            escaped += c;
+        } else if (static_cast<unsigned char>(c) <= 0x1f) {
+            char buf[8];
+            snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned char>(c));
+            escaped += buf;
+        } else {
+            escaped += c;
+        }
+    }
+    return escaped;
+}
 
 static void llama_selective_log_callback(ggml_log_level level, const char * text, void * user_data) {
     (void) level;
@@ -140,7 +164,19 @@ int main(int argc, char ** argv) {
 
     if (!params.sweep_bench_output_jsonl) {
         LOG_TEE("\n");
-        LOG_TEE("%s: n_kv_max = %d, n_batch = %d, n_ubatch = %d, flash_attn = %d, n_gpu_layers = %d, n_threads = %u, n_threads_batch = %u\n", __func__, n_kv_max, params.n_batch, params.n_ubatch, params.flash_attn, params.n_gpu_layers, ctx_params.n_threads, ctx_params.n_threads_batch);
+        LOG_TEE("%s: n_kv_max = %d, n_batch = %d, n_ubatch = %d, flash_attn = %d, n_gpu_layers = %d, n_threads = %u, n_threads_batch = %u, hybrid_manifest = %s, hybrid_profile = %s, hybrid_strict = %s\n",
+            __func__, n_kv_max, params.n_batch, params.n_ubatch, params.flash_attn, params.n_gpu_layers, ctx_params.n_threads, ctx_params.n_threads_batch,
+            get_env_string("HYBRID_MANIFEST").c_str(),
+            get_env_string("HYBRID_PROFILE").c_str(),
+            []() {
+                const std::string value = get_env_string("HYBRID_STRICT");
+                if (value.empty() || value == "0") {
+                    return "0";
+                }
+                std::string upper = value;
+                std::transform(upper.begin(), upper.end(), upper.begin(), [](unsigned char c) { return (char) std::toupper(c); });
+                return (upper == "FALSE" || upper == "NO" || upper == "OFF") ? "0" : "1";
+            }());
         LOG_TEE("\n");
         LOG_TEE("|%6s | %6s | %6s | %8s | %8s | %8s | %8s |\n", "PP", "TG", "N_KV", "T_PP s", "S_PP t/s", "T_TG s", "S_TG t/s");
         LOG_TEE("|%6s-|-%6s-|-%6s-|-%8s-|-%8s-|-%8s-|-%8s-|\n", "------", "------", "------", "--------", "--------", "--------", "--------");
@@ -241,10 +277,25 @@ int main(int argc, char ** argv) {
         const float speed_tg = tg / t_tg;
 
         if(params.sweep_bench_output_jsonl) {
+            const std::string hybrid_manifest = get_env_string("HYBRID_MANIFEST");
+            const std::string hybrid_profile = get_env_string("HYBRID_PROFILE");
+            const int hybrid_strict = []() {
+                const std::string value = get_env_string("HYBRID_STRICT");
+                if (value.empty() || value == "0") {
+                    return 0;
+                }
+                std::string upper = value;
+                std::transform(upper.begin(), upper.end(), upper.begin(), [](unsigned char c) { return (char) std::toupper(c); });
+                return (upper == "FALSE" || upper == "NO" || upper == "OFF") ? 0 : 1;
+            }();
             LOG_TEE(
                 "{\"n_kv_max\": %d, \"n_batch\": %d, \"n_ubatch\": %d, \"flash_attn\": %d, \"n_gpu_layers\": %d, \"n_threads\": %u, \"n_threads_batch\": %u, "
+                "\"hybrid_manifest\": \"%s\", \"hybrid_profile\": \"%s\", \"hybrid_strict\": %d, "
                 "\"pp\": %d, \"tg\": %d, \"n_kv\": %d, \"t_pp\": %f, \"speed_pp\": %f, \"t_tg\": %f, \"speed_tg\": %f }\n",
                 n_kv_max, params.n_batch, params.n_ubatch, params.flash_attn, params.n_gpu_layers, ctx_params.n_threads, ctx_params.n_threads_batch,
+                json_escape(hybrid_manifest).c_str(),
+                json_escape(hybrid_profile).c_str(),
+                hybrid_strict,
                 pp, tg, n_kv, t_pp, speed_pp, t_tg, speed_tg
             );
         } else {

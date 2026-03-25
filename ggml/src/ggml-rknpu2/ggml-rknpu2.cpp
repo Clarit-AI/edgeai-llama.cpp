@@ -28,6 +28,7 @@
 #include <unordered_map>
 #include <random>
 #include <limits>
+#include <stdexcept>
 
 #define UNUSED(x) (void)(x)
 
@@ -985,9 +986,6 @@ static void ggml_backend_rknpu_device_get_props(ggml_backend_dev_t dev, struct g
 static bool ggml_backend_rknpu_device_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
     UNUSED(dev);
 
-    // Getting the current device configuration
-    const auto& config = rknpu2_configuration::Rknpu2ConfigManager::get_instance().get_current_config();
-
     switch (op->op) {
         case GGML_OP_NONE:
             return true;
@@ -995,6 +993,16 @@ static bool ggml_backend_rknpu_device_supports_op(ggml_backend_dev_t dev, const 
         case GGML_OP_MUL_MAT: {
             const struct ggml_tensor * src0 = op->src[0]; // Weights
             const struct ggml_tensor * src1 = op->src[1]; // Activations
+            const auto & config = rknpu2_configuration::Rknpu2ConfigManager::get_instance().get_current_config();
+            const auto * manifest_route = config.resolve_manifest_route(src0);
+            const bool manifest_strict = manifest_route != nullptr && manifest_route->strict;
+            const bool manifest_mode = manifest_route != nullptr;
+
+            if (manifest_mode) {
+                if (manifest_route->force_cpu || !manifest_route->valid || manifest_route->pipeline == nullptr) {
+                    return false;
+                }
+            }
 
             // Explicitly reject IQK quantization types - NPU cannot handle these
             // These types have different block structures than standard quants
@@ -1047,7 +1055,10 @@ static bool ggml_backend_rknpu_device_supports_op(ggml_backend_dev_t dev, const 
             }
 
             // Searching for available hardware pipeline for this tensor
-            const auto* pipeline = config.resolve_op_support(src0);
+            const auto* pipeline = manifest_mode ? manifest_route->pipeline : nullptr;
+            if (!manifest_mode) {
+                pipeline = config.resolve_op_support(src0);
+            }
             if (!pipeline) {
                 return false;
             }
@@ -1060,26 +1071,41 @@ static bool ggml_backend_rknpu_device_supports_op(ggml_backend_dev_t dev, const 
 
             // Checking if activation type matches the supported operation
             if (src1->type != GGML_TYPE_F32) {
+                if (manifest_strict) {
+                    throw std::runtime_error("RKNPU2 strict hybrid route rejected tensor '" + std::string(src0->name ? src0->name : "") + "' because src1 is not F32");
+                }
                 return false;
             }
 
             // Checking for K alignment
             if (src0->ne[0] % pipeline->k_align != 0) {
+                if (manifest_strict) {
+                    throw std::runtime_error("RKNPU2 strict hybrid route rejected tensor '" + std::string(src0->name ? src0->name : "") + "' because K alignment does not match");
+                }
                 return false;
             }
 
             // Checking for N alignment
             if (src0->ne[1] % pipeline->n_align != 0) {
+                if (manifest_strict) {
+                    throw std::runtime_error("RKNPU2 strict hybrid route rejected tensor '" + std::string(src0->name ? src0->name : "") + "' because N alignment does not match");
+                }
                 return false;
             }
 
             // Checking for exact dimensions
             if (src1->ne[0] != src0->ne[0]) {
+                 if (manifest_strict) {
+                    throw std::runtime_error("RKNPU2 strict hybrid route rejected tensor '" + std::string(src0->name ? src0->name : "") + "' because src1->ne[0] != src0->ne[0]");
+                 }
                  return false;
             }
 
             // Checking contiguous memory
             if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) {
+                if (manifest_strict) {
+                    throw std::runtime_error("RKNPU2 strict hybrid route rejected tensor '" + std::string(src0->name ? src0->name : "") + "' because tensors are not contiguous");
+                }
                 return false;
             }
 

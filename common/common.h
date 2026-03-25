@@ -17,6 +17,8 @@
 #include "log.h"
 #include <set>
 #include <cmath>
+#include <array>
+#include <regex>
 #include <string>
 #include <sstream>
 #include <string_view>
@@ -27,6 +29,7 @@
 #include <tuple>
 #include <map>
 #include <sstream>
+#include <nlohmann/json_fwd.hpp>
 
 #ifdef _WIN32
 #define DIRECTORY_SEPARATOR '\\'
@@ -258,6 +261,8 @@ struct gpt_params {
 
     std::string model                = ""; // model path
     std::string model_alias          = "unknown"; // model alias
+    std::string hybrid_manifest      = ""; // optional hybrid manifest sidecar path
+    std::string hybrid_profile       = ""; // optional hybrid manifest profile override
     std::string model_url            = ""; // model url to download
     std::string hf_token             = ""; // HF token
     std::string hf_repo              = ""; // HF repo
@@ -399,6 +404,9 @@ struct gpt_params {
     int reasoning_budget      = -1;
     bool prefill_assistant    = true;
     bool dry_run              = false;
+    bool hybrid_dry_run       = false; // resolve hybrid manifest and stop before tensor loading
+    bool hybrid_dump_plan     = false; // dump resolved hybrid tensor plan during model load
+    bool hybrid_strict        = false; // fail on unsupported hybrid manifest rules instead of falling back
 
     std::vector<std::string> api_keys;
 

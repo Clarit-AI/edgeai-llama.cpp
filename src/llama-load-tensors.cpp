@@ -397,6 +397,20 @@ static std::vector<int> create_split(int nr, int granularity, const std::vector<
 }
 
 ggml_context * create_tensors_helper::get_context_for_tensor(ggml_context * ctx, const std::string & name) {
+    if (const llama_hybrid_route * route = ml.get_hybrid_route(name)) {
+        if (route->source != LLAMA_HYBRID_ROUTE_SOURCE_LEGACY && route->buft != nullptr) {
+            const struct ggml_tensor * cur = ml.get_tensor_meta(name.c_str());
+            const size_t nbytes = cur ? ggml_nbytes(cur) : 0;
+            LLAMA_LOG_INFO("Tensor %s (size = %.2f MiB) resolved by %s hybrid plan to %s: %s\n",
+                    name.c_str(),
+                    nbytes / 1024.0 / 1024.0,
+                    route->source == LLAMA_HYBRID_ROUTE_SOURCE_MANIFEST ? "manifest" : "override",
+                    ggml_backend_buft_name(route->buft),
+                    route->reason.c_str());
+            return ctx_for_buft(route->buft);
+        }
+    }
+
     for (auto & o : overrides) {
         if (std::regex_search(name, o.first)) {
             const struct ggml_tensor * cur = ml.get_tensor_meta(name.c_str());

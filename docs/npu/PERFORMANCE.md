@@ -12,6 +12,38 @@ Benchmarking
 ./build/bin/llama-bench -m models/your-model.gguf -g 99
 ```
 
+### Hybrid Manifest Attribution
+
+For experiment runs that use a manifest-driven route policy, export the policy metadata so it shows up in benchmark output:
+
+```bash
+HYBRID_MANIFEST=/path/to/model.gguf.hybrid.json \
+HYBRID_PROFILE=balanced \
+HYBRID_STRICT=1 \
+    ./build/bin/llama-bench -m models/your-model.gguf -g 99
+```
+
+The benchmark output now includes `hybrid_manifest`, `hybrid_profile`, and `hybrid_strict` fields so CPU, legacy RKNPU2, and manifest-driven runs can be compared side by side without guessing which policy was active.
+
+### Recommended Comparison Matrix
+
+For each target model, capture these three runs:
+
+```bash
+# CPU baseline
+./build/bin/llama-bench -m models/your-model.gguf -g 0
+
+# Current RKNPU2 baseline
+./build/bin/llama-bench -m models/your-model.gguf -g 99
+
+# Manifest-driven hybrid policy
+HYBRID_MANIFEST=/path/to/model.gguf.hybrid.json \
+HYBRID_PROFILE=balanced \
+    ./build/bin/llama-bench -m models/your-model.gguf -g 99
+```
+
+Use the same comparison for `llama-sweep-bench` when you want to see whether the policy helps prompt processing, token generation, or both across different KV sizes.
+
 ### Expected Performance (RK3588, 3 NPU cores)
 
 | Model Size | Quantization | Tokens/sec (NPU) | Tokens/sec (CPU) |

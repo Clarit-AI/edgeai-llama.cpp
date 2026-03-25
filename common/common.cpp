@@ -499,6 +499,11 @@ void gpt_params_parse_from_env(gpt_params & params) {
     get_env("LLAMA_ARG_CACHE_TYPE_V",     params.cache_type_v);
     get_env("LLAMA_ARG_MLOCK",            params.use_mlock);
     get_env("LLAMA_ARG_K_CACHE_HADAMARD", params.k_cache_hadamard);
+    get_env("LLAMA_ARG_HYBRID_MANIFEST",  params.hybrid_manifest);
+    get_env("LLAMA_ARG_HYBRID_PROFILE",   params.hybrid_profile);
+    get_env("LLAMA_ARG_HYBRID_DRY_RUN",   params.hybrid_dry_run);
+    get_env("LLAMA_ARG_HYBRID_DUMP_PLAN", params.hybrid_dump_plan);
+    get_env("LLAMA_ARG_HYBRID_STRICT",    params.hybrid_strict);
 
 }
 
@@ -1738,6 +1743,28 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.dry_run = true;
         return true;
     }
+    if (arg == "--hybrid-manifest") {
+        CHECK_ARG
+        params.hybrid_manifest = argv[i];
+        return true;
+    }
+    if (arg == "--hybrid-profile") {
+        CHECK_ARG
+        params.hybrid_profile = argv[i];
+        return true;
+    }
+    if (arg == "--hybrid-dry-run") {
+        params.hybrid_dry_run = true;
+        return true;
+    }
+    if (arg == "--hybrid-dump-plan") {
+        params.hybrid_dump_plan = true;
+        return true;
+    }
+    if (arg == "--hybrid-strict") {
+        params.hybrid_strict = true;
+        return true;
+    }
     if (arg == "--in-prefix-bos") {
         params.input_prefix_bos = true;
         params.enable_chat_template = false;
@@ -2462,6 +2489,11 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --rpc SERVERS",          "comma separated list of RPC servers" });
     options.push_back({ "*",           "-cuda, --cuda-params",          "comma separate list of cuda parameters" });
     options.push_back({ "*",           "-draft, --draft-params",        "comma separate list of draft model parameters" });
+    options.push_back({ "*",           "       --hybrid-manifest FILE",  "path to a hybrid manifest sidecar or explicit manifest file" });
+    options.push_back({ "*",           "       --hybrid-profile NAME",   "select a named hybrid manifest profile (default: manifest active_profile)" });
+    options.push_back({ "*",           "       --hybrid-dry-run",        "resolve and validate a hybrid manifest without loading tensors" });
+    options.push_back({ "*",           "       --hybrid-dump-plan",      "print the resolved hybrid plan during model load" });
+    options.push_back({ "*",           "       --hybrid-strict",         "fail when hybrid manifest rules cannot be satisfied" });
     if (llama_supports_mlock()) {
         options.push_back({ "*",           "       --mlock",                "force system to keep model in RAM rather than swapping or compressing" });
     }
@@ -3300,6 +3332,8 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.mla             = params.mla_attn;
     mparams.dry_run         = params.dry_run;
     mparams.rpc_servers     = params.rpc_servers.c_str();
+    mparams.hybrid_manifest = params.hybrid_manifest.empty() ? nullptr : params.hybrid_manifest.c_str();
+    mparams.hybrid_profile  = params.hybrid_profile.empty() ? nullptr : params.hybrid_profile.c_str();
     mparams.main_gpu        = params.main_gpu;
     mparams.max_gpu         = params.max_gpu;
     mparams.ncmoe           = params.ncmoe;
@@ -3321,6 +3355,9 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.merge_up_gate_exps = params.merge_up_gate_exps;
     mparams.mtp             = params.has_mtp;
     mparams.flash_attn      = params.flash_attn;
+    mparams.hybrid_dry_run  = params.hybrid_dry_run;
+    mparams.hybrid_dump_plan = params.hybrid_dump_plan;
+    mparams.hybrid_strict   = params.hybrid_strict;
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;
     } else {
@@ -4301,6 +4338,12 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "chunks: %d # default: -1 (unlimited)\n", params.n_chunks);
     fprintf(stream, "color: %s # default: false\n", params.use_color ? "true" : "false");
     fprintf(stream, "ctx_size: %d # default: 512\n", params.n_ctx);
+    fprintf(stream, "dry_run: %s # default: false\n", params.dry_run ? "true" : "false");
+    fprintf(stream, "hybrid_manifest: %s # default: none\n", params.hybrid_manifest.empty() ? "none" : params.hybrid_manifest.c_str());
+    fprintf(stream, "hybrid_profile: %s # default: none\n", params.hybrid_profile.empty() ? "none" : params.hybrid_profile.c_str());
+    fprintf(stream, "hybrid_dry_run: %s # default: false\n", params.hybrid_dry_run ? "true" : "false");
+    fprintf(stream, "hybrid_dump_plan: %s # default: false\n", params.hybrid_dump_plan ? "true" : "false");
+    fprintf(stream, "hybrid_strict: %s # default: false\n", params.hybrid_strict ? "true" : "false");
     fprintf(stream, "dry_allowed_length: %d # default: 2\n", sparams.dry_allowed_length);
     fprintf(stream, "dry_base: %.2f # default: 1.75\n", sparams.dry_base);
     fprintf(stream, "dry_multiplier: %.1f # default: 0.0\n", sparams.dry_multiplier);
@@ -4359,6 +4402,11 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "mlock: %s # default: false\n", params.use_mlock ? "true" : "false");
     fprintf(stream, "model: %s # default: %s\n", params.model.c_str(), DEFAULT_MODEL_PATH);
     fprintf(stream, "model_draft: %s # default:\n", params.speculative.model.c_str());
+    fprintf(stream, "hybrid_manifest: %s\n", params.hybrid_manifest.c_str());
+    fprintf(stream, "hybrid_profile: %s\n", params.hybrid_profile.c_str());
+    fprintf(stream, "hybrid_dry_run: %s # default: false\n", params.hybrid_dry_run ? "true" : "false");
+    fprintf(stream, "hybrid_dump_plan: %s # default: false\n", params.hybrid_dump_plan ? "true" : "false");
+    fprintf(stream, "hybrid_strict: %s # default: false\n", params.hybrid_strict ? "true" : "false");
     fprintf(stream, "multiline_input: %s # default: false\n", params.multiline_input ? "true" : "false");
     fprintf(stream, "n_gpu_layers: %d # default: -1\n", params.n_gpu_layers);
     fprintf(stream, "n_predict: %d # default: -1 (unlimited)\n", params.n_predict);

@@ -398,6 +398,12 @@ extern "C" {
 
         const struct llama_model_tensor_buft_override * tensor_buft_overrides;
 
+        const char * hybrid_manifest;
+        const char * hybrid_profile;
+        bool hybrid_dry_run;
+        bool hybrid_dump_plan;
+        bool hybrid_strict;
+
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool vocab_only;    // only load the vocabulary, no weights
         bool use_mmap;      // use mmap if possible
