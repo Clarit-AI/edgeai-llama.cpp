@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdlib>
 #include <fstream>
 #include <stdexcept>
@@ -291,13 +292,15 @@ namespace {
             const auto & profiles = manifest["profiles"];
             if (!effective_profile.empty() && profiles.contains(effective_profile)) {
                 profile_obj = profiles[effective_profile];
+            } else if (!effective_profile.empty()) {
+                // explicitly requested profile not found
+                error = "hybrid manifest profile '" + effective_profile + "' not found";
+                return false;
             } else if (profiles.contains("default")) {
                 profile_obj = profiles["default"];
             } else if (!profiles.empty()) {
                 profile_obj = profiles.begin().value();
-                if (effective_profile.empty()) {
-                    effective_profile = profiles.begin().key();
-                }
+                effective_profile = profiles.begin().key();
             } else {
                 error = "hybrid manifest profiles object is empty";
                 return false;
@@ -422,7 +425,8 @@ const Rknpu2HybridRoute* Rknpu2DeviceConfig::resolve_explicit_route(const struct
     }
 
     std::lock_guard<std::mutex> lock(*pattern_mutex);
-    auto it = explicit_route_cache.find(name);
+    auto cache_key = std::make_pair(current_model_id, name);
+    auto it = explicit_route_cache.find(cache_key);
     if (it == explicit_route_cache.end()) {
         return nullptr;
     }
@@ -457,7 +461,8 @@ void Rknpu2DeviceConfig::register_explicit_route(const std::string & tensor_name
         route.pipeline = pipeline;
     }
 
-    explicit_route_cache[tensor_name] = std::move(route);
+    auto cache_key = std::make_pair(current_model_id, tensor_name);
+    explicit_route_cache[cache_key] = std::move(route);
 }
 
 const Rknpu2HybridRoute* Rknpu2DeviceConfig::resolve_manifest_route(const struct ggml_tensor * w_tensor) const {
@@ -471,7 +476,8 @@ const Rknpu2HybridRoute* Rknpu2DeviceConfig::resolve_manifest_route(const struct
     }
 
     std::lock_guard<std::mutex> lock(*pattern_mutex);
-    auto it = hybrid_route_cache.find(name);
+    auto cache_key = std::make_pair(current_model_id, name);
+    auto it = hybrid_route_cache.find(cache_key);
     if (it != hybrid_route_cache.end()) {
         return &it->second;
     }
@@ -496,12 +502,12 @@ const Rknpu2HybridRoute* Rknpu2DeviceConfig::resolve_manifest_route(const struct
             route.force_cpu = true;
             route.valid = true;
             route.fallback_reason = "manifest rule requests CPU";
-            hybrid_route_cache.emplace(name, route);
+            hybrid_route_cache.emplace(cache_key, route);
             if (hybrid_manifest_dump_plan) {
                 LLAMA_LOG_INFO("RKNPU2: manifest route %s -> CPU (%s, role=%s, layer=%d)\n",
                     name.c_str(), route.rule_name.c_str(), route.role.c_str(), route.layer_id);
             }
-            return &hybrid_route_cache.find(name)->second;
+            return &hybrid_route_cache.find(cache_key)->second;
         }
 
         if (rule.pipeline_name.empty()) {
@@ -509,8 +515,8 @@ const Rknpu2HybridRoute* Rknpu2DeviceConfig::resolve_manifest_route(const struct
             if (route.strict) {
                 throw std::runtime_error("hybrid manifest rule '" + route.rule_name + "' matched tensor '" + name + "' but did not name an NPU pipeline");
             }
-            hybrid_route_cache.emplace(name, route);
-            return &hybrid_route_cache.find(name)->second;
+            hybrid_route_cache.emplace(cache_key, route);
+            return &hybrid_route_cache.find(cache_key)->second;
         }
 
         const auto * pipeline = find_pipeline(rule.pipeline_name);
@@ -519,19 +525,19 @@ const Rknpu2HybridRoute* Rknpu2DeviceConfig::resolve_manifest_route(const struct
             if (route.strict) {
                 throw std::runtime_error("hybrid manifest rule '" + route.rule_name + "' references unknown pipeline '" + rule.pipeline_name + "'");
             }
-            hybrid_route_cache.emplace(name, route);
-            return &hybrid_route_cache.find(name)->second;
+            hybrid_route_cache.emplace(cache_key, route);
+            return &hybrid_route_cache.find(cache_key)->second;
         }
 
         route.valid = true;
         route.pipeline_name = pipeline->pipeline_name;
         route.pipeline = pipeline;
-        hybrid_route_cache.emplace(name, route);
+        hybrid_route_cache.emplace(cache_key, route);
         if (hybrid_manifest_dump_plan) {
             LLAMA_LOG_INFO("RKNPU2: manifest route %s -> %s (%s, role=%s, layer=%d)\n",
                 name.c_str(), route.pipeline_name.c_str(), route.rule_name.c_str(), route.role.c_str(), route.layer_id);
         }
-        return &hybrid_route_cache.find(name)->second;
+        return &hybrid_route_cache.find(cache_key)->second;
     }
 
     return nullptr;
@@ -567,6 +573,8 @@ const Rknpu2HardwarePipeline* Rknpu2DeviceConfig::resolve_op_support(const struc
             if (route->force_cpu || route->pipeline == nullptr || !route->valid) {
                 return nullptr;
             }
+            // Return manifest-selected pipeline instead of falling through to legacy chooser
+            return route->pipeline;
         }
 
         if (to_upper(hybrid_manifest_default_policy) == "CPU_ONLY") {
@@ -717,6 +725,8 @@ Rknpu2ConfigManager::Rknpu2ConfigManager() {
                 rk3588_config.hybrid_manifest_rules,
                 error)) {
             rk3588_config.hybrid_manifest_loaded = true;
+            // Generate unique model ID to avoid cache collisions across models
+            rk3588_config.current_model_id = rk3588_config.hybrid_manifest_path + ":" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
         } else {
             if (rk3588_config.hybrid_manifest_strict) {
                 throw std::runtime_error(error);

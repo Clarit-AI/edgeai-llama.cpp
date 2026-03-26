@@ -138,8 +138,9 @@ struct Rknpu2DeviceConfig {
     std::string hybrid_manifest_profile = "default";
     std::string hybrid_manifest_default_policy = "legacy";
     std::vector<Rknpu2HybridRule> hybrid_manifest_rules;
-    mutable std::map<std::string, Rknpu2HybridRoute> hybrid_route_cache;
-    mutable std::map<std::string, Rknpu2HybridRoute> explicit_route_cache;
+    std::string current_model_id;
+    mutable std::map<std::pair<std::string, std::string>, Rknpu2HybridRoute> hybrid_route_cache;
+    mutable std::map<std::pair<std::string, std::string>, Rknpu2HybridRoute> explicit_route_cache;
 
     /**
      * @brief Resolves the appropriate hardware pipeline for a given tensor.

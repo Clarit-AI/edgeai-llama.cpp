@@ -992,6 +992,15 @@ struct cmd_params_instance {
         mparams.tensor_buft_overrides = buft_overrides;
         mparams.mla = mla_attn;
         mparams.max_gpu = max_gpu;
+        if (hybrid_manifest_enabled && !hybrid_manifest.empty()) {
+            mparams.hybrid_manifest = hybrid_manifest.c_str();
+        }
+        if (hybrid_profile_enabled && !hybrid_profile.empty()) {
+            mparams.hybrid_profile = hybrid_profile.c_str();
+        }
+        if (hybrid_strict_enabled) {
+            mparams.hybrid_strict = true;
+        }
 
         return mparams;
     }
@@ -1944,6 +1953,15 @@ struct markdown_printer : public printer {
         }
         if (params.no_ooae != cmd_params_defaults.no_ooae) {
             fields.emplace_back("no_ooae");
+        }
+        if (params.hybrid_manifest != cmd_params_defaults.hybrid_manifest) {
+            fields.emplace_back("hybrid_manifest");
+        }
+        if (params.hybrid_profile != cmd_params_defaults.hybrid_profile) {
+            fields.emplace_back("hybrid_profile");
+        }
+        if (params.hybrid_strict != cmd_params_defaults.hybrid_strict) {
+            fields.emplace_back("hybrid_strict");
         }
         fields.emplace_back("test");
         fields.emplace_back("t/s");

@@ -398,12 +398,6 @@ extern "C" {
 
         const struct llama_model_tensor_buft_override * tensor_buft_overrides;
 
-        const char * hybrid_manifest;
-        const char * hybrid_profile;
-        bool hybrid_dry_run;
-        bool hybrid_dump_plan;
-        bool hybrid_strict;
-
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool vocab_only;    // only load the vocabulary, no weights
         bool use_mmap;      // use mmap if possible
@@ -417,6 +411,13 @@ extern "C" {
         bool mtp;           // if true, load MTP layers if present
         bool dry_run;       // skip loading tensors
         bool flash_attn;
+
+        // Hybrid routing fields - placed at end for ABI stability
+        const char * hybrid_manifest;
+        const char * hybrid_profile;
+        bool hybrid_dry_run;
+        bool hybrid_dump_plan;
+        bool hybrid_strict;
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations

@@ -4402,11 +4402,6 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "mlock: %s # default: false\n", params.use_mlock ? "true" : "false");
     fprintf(stream, "model: %s # default: %s\n", params.model.c_str(), DEFAULT_MODEL_PATH);
     fprintf(stream, "model_draft: %s # default:\n", params.speculative.model.c_str());
-    fprintf(stream, "hybrid_manifest: %s\n", params.hybrid_manifest.c_str());
-    fprintf(stream, "hybrid_profile: %s\n", params.hybrid_profile.c_str());
-    fprintf(stream, "hybrid_dry_run: %s # default: false\n", params.hybrid_dry_run ? "true" : "false");
-    fprintf(stream, "hybrid_dump_plan: %s # default: false\n", params.hybrid_dump_plan ? "true" : "false");
-    fprintf(stream, "hybrid_strict: %s # default: false\n", params.hybrid_strict ? "true" : "false");
     fprintf(stream, "multiline_input: %s # default: false\n", params.multiline_input ? "true" : "false");
     fprintf(stream, "n_gpu_layers: %d # default: -1\n", params.n_gpu_layers);
     fprintf(stream, "n_predict: %d # default: -1 (unlimited)\n", params.n_predict);

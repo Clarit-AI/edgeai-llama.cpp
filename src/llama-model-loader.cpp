@@ -277,49 +277,59 @@ static bool parse_layers(const json & value, hybrid_manifest_rule & rule, std::s
     return true;
 }
 
-static bool parse_rule(const json & value, hybrid_manifest_rule & rule, std::string & err) {
+static bool parse_rule(const json & value, hybrid_manifest_rule & rule, std::string & err, bool strict) {
     if (!value.is_object()) {
         err = "rule entry must be a JSON object";
         return false;
     }
-    rule.name = value.value("name", std::string());
-    rule.match = value.value("match", std::string());
-    rule.backend = lower_copy(value.value("backend", std::string("cpu")));
-    rule.npu_pipeline = value.value("npu_pipeline", std::string());
-    rule.source_quant_allow = json_string_array(value.value("source_quant_allow", json::array()));
-    rule.fallback = lower_copy(value.value("fallback", std::string("cpu")));
-    rule.role = value.value("role", std::string());
-    rule.required = value.value("required", false);
 
-    if (value.contains("layers")) {
-        if (!parse_layers(value["layers"], rule, err)) {
-            return false;
-        }
-    }
-    if (value.contains("min_shape")) {
-        const json & shape = value["min_shape"];
-        if (!shape.is_object()) {
-            err = "rule.min_shape must be an object";
-            return false;
-        }
-        rule.k_align = shape.value("k_align", 0);
-        rule.n_align = shape.value("n_align", 0);
-        rule.min_m   = shape.value("min_m", 0);
-        rule.min_n   = shape.value("min_n", 0);
-    }
-
-    const std::string match = rule.match.empty() ? ".*" : rule.match;
     try {
-        rule.match_re = std::regex(match);
+        rule.name = value.value("name", std::string());
+        rule.match = value.value("match", std::string());
+        rule.backend = lower_copy(value.value("backend", std::string("cpu")));
+        rule.npu_pipeline = value.value("npu_pipeline", std::string());
+        rule.source_quant_allow = json_string_array(value.value("source_quant_allow", json::array()));
+        rule.fallback = lower_copy(value.value("fallback", std::string("cpu")));
+        rule.role = value.value("role", std::string());
+        rule.required = value.value("required", false);
+
+        if (value.contains("layers")) {
+            if (!parse_layers(value["layers"], rule, err)) {
+                return false;
+            }
+        }
+        if (value.contains("min_shape")) {
+            const json & shape = value["min_shape"];
+            if (!shape.is_object()) {
+                err = "rule.min_shape must be an object";
+                return false;
+            }
+            rule.k_align = shape.value("k_align", 0);
+            rule.n_align = shape.value("n_align", 0);
+            rule.min_m   = shape.value("min_m", 0);
+            rule.min_n   = shape.value("min_n", 0);
+        }
+
+        const std::string match = rule.match.empty() ? ".*" : rule.match;
+        try {
+            rule.match_re = std::regex(match);
+        } catch (const std::exception & e) {
+            err = format("invalid rule regex '%s': %s", match.c_str(), e.what());
+            return false;
+        }
     } catch (const std::exception & e) {
-        err = format("invalid rule regex '%s': %s", match.c_str(), e.what());
-        return false;
+        err = format("JSON parsing error in rule: %s", e.what());
+        if (strict) {
+            return false;
+        }
+        LLAMA_LOG_WARN("%s: %s, using defaults\n", __func__, err.c_str());
+        // Continue with defaults already set
     }
 
     return true;
 }
 
-static bool parse_rules_array(const json & value, std::vector<hybrid_manifest_rule> & rules, std::string & err) {
+static bool parse_rules_array(const json & value, std::vector<hybrid_manifest_rule> & rules, std::string & err, bool strict) {
     if (!value.is_array()) {
         err = "rules must be an array";
         return false;
@@ -327,7 +337,7 @@ static bool parse_rules_array(const json & value, std::vector<hybrid_manifest_ru
     rules.clear();
     for (const auto & entry : value) {
         hybrid_manifest_rule rule;
-        if (!parse_rule(entry, rule, err)) {
+        if (!parse_rule(entry, rule, err, strict)) {
             return false;
         }
         rules.push_back(std::move(rule));
@@ -335,7 +345,7 @@ static bool parse_rules_array(const json & value, std::vector<hybrid_manifest_ru
     return true;
 }
 
-static bool parse_hybrid_manifest(const std::string & path, const std::string & profile_name, hybrid_manifest & manifest, std::string & err) {
+static bool parse_hybrid_manifest(const std::string & path, const std::string & profile_name, hybrid_manifest & manifest, std::string & err, bool strict) {
     std::ifstream f(path);
     if (!f.is_open()) {
         err = format("failed to open hybrid manifest '%s'", path.c_str());
@@ -350,47 +360,56 @@ static bool parse_hybrid_manifest(const std::string & path, const std::string & 
         return false;
     }
 
-    manifest.version = doc.value("version", 1);
-    if (doc.contains("default_cpu_policy")) {
-        manifest.default_cpu_policy = lower_copy(doc["default_cpu_policy"].get<std::string>());
-    }
-
-    if (doc.contains("model_hint") && doc["model_hint"].is_object()) {
-        const json & hint = doc["model_hint"];
-        manifest.model_hint_arch = lower_copy(hint.value("arch", std::string()));
-        manifest.model_hint_name_regex = hint.value("name_regex", std::string());
-        manifest.model_hint_n_layer = hint.value("n_layer", -1);
-    }
-
-    if (doc.contains("rules")) {
-        if (!parse_rules_array(doc["rules"], manifest.rules, err)) {
-            return false;
+    try {
+        manifest.version = doc.value("version", 1);
+        if (doc.contains("default_cpu_policy")) {
+            manifest.default_cpu_policy = lower_copy(doc["default_cpu_policy"].get<std::string>());
         }
-    }
 
-    if (doc.contains("profiles")) {
-        if (!doc["profiles"].is_object()) {
-            err = "profiles must be an object";
-            return false;
+        if (doc.contains("model_hint") && doc["model_hint"].is_object()) {
+            const json & hint = doc["model_hint"];
+            manifest.model_hint_arch = lower_copy(hint.value("arch", std::string()));
+            manifest.model_hint_name_regex = hint.value("name_regex", std::string());
+            manifest.model_hint_n_layer = hint.value("n_layer", -1);
         }
-        for (auto it = doc["profiles"].begin(); it != doc["profiles"].end(); ++it) {
-            hybrid_manifest_profile profile;
-            profile.name = it.key();
-            if (!it.value().is_object()) {
-                err = format("profile '%s' must be an object", profile.name.c_str());
+
+        if (doc.contains("rules")) {
+            if (!parse_rules_array(doc["rules"], manifest.rules, err, strict)) {
                 return false;
             }
-            if (it.value().contains("rules")) {
-                if (!parse_rules_array(it.value()["rules"], profile.rules, err)) {
+        }
+
+        if (doc.contains("profiles")) {
+            if (!doc["profiles"].is_object()) {
+                err = "profiles must be an object";
+                return false;
+            }
+            for (auto it = doc["profiles"].begin(); it != doc["profiles"].end(); ++it) {
+                hybrid_manifest_profile profile;
+                profile.name = it.key();
+                if (!it.value().is_object()) {
+                    err = format("profile '%s' must be an object", profile.name.c_str());
                     return false;
                 }
+                if (it.value().contains("rules")) {
+                    if (!parse_rules_array(it.value()["rules"], profile.rules, err, strict)) {
+                        return false;
+                    }
+                }
+                manifest.profiles.emplace(profile.name, std::move(profile));
             }
-            manifest.profiles.emplace(profile.name, std::move(profile));
         }
-    }
 
-    if (doc.contains("active_profile")) {
-        manifest.active_profile = doc["active_profile"].get<std::string>();
+        if (doc.contains("active_profile")) {
+            manifest.active_profile = doc["active_profile"].get<std::string>();
+        }
+    } catch (const std::exception & e) {
+        err = format("JSON parsing error in manifest: %s", e.what());
+        if (strict) {
+            return false;
+        }
+        LLAMA_LOG_WARN("%s: %s, using defaults\n", __func__, err.c_str());
+        // Continue with defaults already set
     }
 
     const std::string selected_profile = !profile_name.empty() ? profile_name : manifest.active_profile;
@@ -406,7 +425,13 @@ static bool parse_hybrid_manifest(const std::string & path, const std::string & 
     if (manifest.rules.empty() && doc.contains("rules")) {
         // already parsed top-level rules
     } else if (manifest.rules.empty() && !manifest.profiles.empty() && selected_profile.empty()) {
-        manifest.rules = manifest.profiles.begin()->second.rules;
+        if (manifest.profiles.size() == 1) {
+            LLAMA_LOG_WARN("%s: no profile selected, using single profile '%s'\n", __func__, manifest.profiles.begin()->first.c_str());
+            manifest.rules = manifest.profiles.begin()->second.rules;
+        } else {
+            err = format("hybrid manifest has %zu profiles but no profile was selected and no 'default' profile exists", manifest.profiles.size());
+            return false;
+        }
     }
 
     return true;
@@ -655,9 +680,10 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
     tensor_buft_overrides = param_tensor_buft_overrides_p;
     hybrid_manifest_path = hybrid_manifest_path_p ? hybrid_manifest_path_p : get_env_string_fallback({"LLAMA_HYBRID_MANIFEST", "HYBRID_MANIFEST"});
     hybrid_profile = hybrid_profile_p ? hybrid_profile_p : get_env_string_fallback({"LLAMA_HYBRID_PROFILE", "HYBRID_PROFILE"});
-    hybrid_dry_run = hybrid_dry_run_p || get_env_bool_fallback({"LLAMA_HYBRID_DRY_RUN", "HYBRID_DRY_RUN"});
-    hybrid_dump_plan = hybrid_dump_plan_p || get_env_bool_fallback({"LLAMA_HYBRID_DUMP_PLAN", "HYBRID_DUMP_PLAN"});
-    hybrid_strict = hybrid_strict_p || get_env_bool_fallback({"LLAMA_HYBRID_STRICT", "HYBRID_STRICT"});
+    // For booleans, only use env if param was not explicitly provided (default false)
+    hybrid_dry_run = hybrid_dry_run_p ? hybrid_dry_run_p : get_env_bool_fallback({"LLAMA_HYBRID_DRY_RUN", "HYBRID_DRY_RUN"});
+    hybrid_dump_plan = hybrid_dump_plan_p ? hybrid_dump_plan_p : get_env_bool_fallback({"LLAMA_HYBRID_DUMP_PLAN", "HYBRID_DUMP_PLAN"});
+    hybrid_strict = hybrid_strict_p ? hybrid_strict_p : get_env_bool_fallback({"LLAMA_HYBRID_STRICT", "HYBRID_STRICT"});
     if (hybrid_manifest_path.empty()) {
         const std::string default_manifest_path = fname + ".hybrid.json";
         std::ifstream hybrid_manifest_file(default_manifest_path);
@@ -1000,7 +1026,7 @@ void llama_model_loader::build_hybrid_plan() {
     bool manifest_enabled = !hybrid_manifest_path.empty();
     if (manifest_enabled) {
         std::string err;
-        if (!parse_hybrid_manifest(hybrid_manifest_path, hybrid_profile, manifest, err)) {
+        if (!parse_hybrid_manifest(hybrid_manifest_path, hybrid_profile, manifest, err, hybrid_strict)) {
             if (hybrid_strict) {
                 throw std::runtime_error(err);
             }

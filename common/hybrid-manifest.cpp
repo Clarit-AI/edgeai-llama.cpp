@@ -183,7 +183,7 @@ static bool quant_type_allowed(const common_hybrid_rule & rule, ggml_type type) 
 }
 
 static bool rule_role_matches(const common_hybrid_rule & rule, common_hybrid_tensor_role role) {
-    return rule.role == COMMON_HYBRID_TENSOR_ROLE_OTHER || rule.role == role;
+    return !rule.role.has_value() || rule.role.value() == role;
 }
 
 static bool rule_layer_matches(const common_hybrid_rule & rule, int32_t layer_id) {
@@ -290,11 +290,19 @@ static common_hybrid_rule parse_rule(const json & rule_json) {
         }
     }
 
-    if (rule_json.contains("backend")) {
+    bool backend_explicitly_set = rule_json.contains("backend");
+    if (backend_explicitly_set) {
         rule.backend = parse_backend(rule_json.at("backend").get<std::string>());
     }
     if (rule_json.contains("npu_pipeline") && !rule_json.at("npu_pipeline").is_null()) {
         rule.npu_pipeline = rule_json.at("npu_pipeline").get<std::string>();
+        // If npu_pipeline exists and backend was not explicitly set (or is still CPU default), set to NPU
+        if (!backend_explicitly_set || rule.backend == COMMON_HYBRID_BACKEND_CPU) {
+            rule.backend = COMMON_HYBRID_BACKEND_NPU;
+        } else if (rule.backend != COMMON_HYBRID_BACKEND_NPU) {
+            // Backend explicitly set to non-NPU while npu_pipeline is present
+            throw std::runtime_error("hybrid manifest rule has npu_pipeline but backend is not NPU");
+        }
     }
     if (rule.backend == COMMON_HYBRID_BACKEND_NPU && rule.npu_pipeline.empty()) {
         throw std::runtime_error("hybrid manifest NPU rule requires npu_pipeline");
@@ -499,11 +507,11 @@ common_hybrid_manifest common_hybrid_manifest::load_for_model(const std::string 
     return load(candidate, profile);
 }
 
-bool common_hybrid_manifest::matches_model_hint(const std::string & model_name, int32_t n_layer) const {
+bool common_hybrid_manifest::matches_model_hint(const std::string & arch, const std::string & model_name, int32_t n_layer) const {
     if (!loaded) {
         return true;
     }
-    if (!model_hint.arch.empty() && to_lower(model_hint.arch) != to_lower(model_name)) {
+    if (!model_hint.arch.empty() && to_lower(model_hint.arch) != to_lower(arch)) {
         return false;
     }
     if (!model_hint.name.empty() && to_lower(model_hint.name) != to_lower(model_name)) {

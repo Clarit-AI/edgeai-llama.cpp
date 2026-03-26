@@ -2597,6 +2597,12 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
 
         const bool effective_dry_run = params.dry_run || params.hybrid_dry_run;
 
+        if (params.hybrid_dry_run) {
+            LLAMA_LOG_INFO("%s: hybrid dry-run mode - skipping tensor loading\n", __func__);
+            model.dry_run = true;
+            return 0;
+        }
+
         if (!llm_load_tensors(
             ml, model, params.n_gpu_layers, params.mla, params.split_mode, params.main_gpu, params.max_gpu, params.tensor_split,
             params.type_k, params.type_v, params.max_ctx_size, params.n_seq_max, params.n_ubatch, params.amb, params.flash_attn,

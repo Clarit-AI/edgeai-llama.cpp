@@ -1072,7 +1072,7 @@ static bool ggml_backend_rknpu_device_supports_op(ggml_backend_dev_t dev, const 
             // Checking if activation type matches the supported operation
             if (src1->type != GGML_TYPE_F32) {
                 if (manifest_strict) {
-                    throw std::runtime_error("RKNPU2 strict hybrid route rejected tensor '" + std::string(src0->name ? src0->name : "") + "' because src1 is not F32");
+                    fprintf(stderr, "RKNPU2 strict hybrid route rejected tensor '%s' because src1 is not F32\n", src0->name ? src0->name : "");
                 }
                 return false;
             }
@@ -1080,7 +1080,7 @@ static bool ggml_backend_rknpu_device_supports_op(ggml_backend_dev_t dev, const 
             // Checking for K alignment
             if (src0->ne[0] % pipeline->k_align != 0) {
                 if (manifest_strict) {
-                    throw std::runtime_error("RKNPU2 strict hybrid route rejected tensor '" + std::string(src0->name ? src0->name : "") + "' because K alignment does not match");
+                    fprintf(stderr, "RKNPU2 strict hybrid route rejected tensor '%s' because K alignment does not match\n", src0->name ? src0->name : "");
                 }
                 return false;
             }
@@ -1088,7 +1088,7 @@ static bool ggml_backend_rknpu_device_supports_op(ggml_backend_dev_t dev, const 
             // Checking for N alignment
             if (src0->ne[1] % pipeline->n_align != 0) {
                 if (manifest_strict) {
-                    throw std::runtime_error("RKNPU2 strict hybrid route rejected tensor '" + std::string(src0->name ? src0->name : "") + "' because N alignment does not match");
+                    fprintf(stderr, "RKNPU2 strict hybrid route rejected tensor '%s' because N alignment does not match\n", src0->name ? src0->name : "");
                 }
                 return false;
             }
@@ -1096,7 +1096,7 @@ static bool ggml_backend_rknpu_device_supports_op(ggml_backend_dev_t dev, const 
             // Checking for exact dimensions
             if (src1->ne[0] != src0->ne[0]) {
                  if (manifest_strict) {
-                    throw std::runtime_error("RKNPU2 strict hybrid route rejected tensor '" + std::string(src0->name ? src0->name : "") + "' because src1->ne[0] != src0->ne[0]");
+                    fprintf(stderr, "RKNPU2 strict hybrid route rejected tensor '%s' because src1->ne[0] != src0->ne[0]\n", src0->name ? src0->name : "");
                  }
                  return false;
             }
@@ -1104,7 +1104,7 @@ static bool ggml_backend_rknpu_device_supports_op(ggml_backend_dev_t dev, const 
             // Checking contiguous memory
             if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) {
                 if (manifest_strict) {
-                    throw std::runtime_error("RKNPU2 strict hybrid route rejected tensor '" + std::string(src0->name ? src0->name : "") + "' because tensors are not contiguous");
+                    fprintf(stderr, "RKNPU2 strict hybrid route rejected tensor '%s' because tensors are not contiguous\n", src0->name ? src0->name : "");
                 }
                 return false;
             }

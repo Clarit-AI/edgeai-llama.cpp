@@ -230,7 +230,7 @@ done
 --dry-run -v
 
 # Show manifest-driven plan summary from the backend layer
-HYBRID_MANIFEST=/path/to/model.gguf.hybrid.json HYBRID_DUMP_PLAN=1 -v
+HYBRID_MANIFEST=/path/to/model.gguf.hybrid.json HYBRID_DUMP_PLAN=1 llama-cli -v
 
 # Capture full log
 ./build/bin/llama-cli -m model.gguf -p "Test" --n-gpu-layers 99 2>&1 | tee run.log

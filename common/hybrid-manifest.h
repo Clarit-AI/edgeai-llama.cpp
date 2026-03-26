@@ -76,7 +76,7 @@ struct common_hybrid_rule {
     common_hybrid_shape_constraints min_shape;
 
     std::string fallback = "cpu";
-    common_hybrid_tensor_role role = COMMON_HYBRID_TENSOR_ROLE_OTHER;
+    std::optional<common_hybrid_tensor_role> role;
     bool required = false;
 };
 
@@ -124,7 +124,7 @@ struct common_hybrid_manifest {
     static common_hybrid_manifest load_for_model(const std::string & model_path, const std::string & explicit_path = {}, const std::string & profile = {});
 
     bool has_manifest() const { return loaded; }
-    bool matches_model_hint(const std::string & model_name, int32_t n_layer) const;
+    bool matches_model_hint(const std::string & arch, const std::string & model_name, int32_t n_layer) const;
     common_hybrid_tensor_plan resolve_plan(const std::vector<common_hybrid_tensor_info> & tensors, bool strict = false) const;
     std::string describe(const common_hybrid_tensor_plan * plan = nullptr) const;
 };
