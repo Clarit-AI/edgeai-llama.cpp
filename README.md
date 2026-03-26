@@ -27,7 +27,7 @@ By merging these branches, `edgeai_llama.cpp` allows for hybrid inference workfl
 | **Rockchip NPU** | `KHA/rk-llama.cpp` | As needed (Custom Hardware Patches) |
 | **GGML Core** | `ggerganov/llama.cpp` | Via `ik` tracking |
 
->[!NOTES]
+>[!NOTE]
 > - Some users have reported issues with graph parallel (a.k.a. split mode `graph`) and partial GPU offload (using `--cpu-moe` or `--n-cpu-moe` or tensor overrides). If you are using/want to use split mode graph and observe gibberish/incoherent responses, try adding `-cuda graphs=0` to your command line.
 > - **Hardware Support:** This fork is specifically optimized for CPU (AVX2/ARM_NEON), CUDA, and Rockchip NPU.
 Unlike other Rockchip forks, our NPU backend has been modernized to support current ggml standards, preventing the 1000+ commit "lag" found in older implementations.
