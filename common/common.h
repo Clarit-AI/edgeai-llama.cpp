@@ -286,6 +286,10 @@ struct gpt_params {
     std::vector<llama_model_kv_override> kv_overrides;
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
     std::vector<std::pair<int,int>> offload_policy;
+    std::string hybrid_manifest         = "";
+    std::string hybrid_dump_plan        = "";
+    bool hybrid_strict                  = false;
+    bool hybrid_dry_run                 = false;
 
     bool lora_init_without_apply = false; // only load lora to memory, but do not apply it to ctx (user can manually apply lora later using llama_lora_adapter_apply)
     std::vector<llama_lora_adapter_info> lora_adapters; // lora adapter path with user defined scale

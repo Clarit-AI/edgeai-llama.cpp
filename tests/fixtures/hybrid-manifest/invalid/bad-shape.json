@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "profile": "dense-balanced",
+  "strict": true,
+  "routes": [
+    {
+      "name": "bad-shape",
+      "match": "^blk\\.",
+      "target": "default",
+      "shape": {
+        "n_divisible_by": 0
+      }
+    }
+  ]
+}

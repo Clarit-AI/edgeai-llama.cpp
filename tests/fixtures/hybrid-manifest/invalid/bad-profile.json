@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "profile": "unknown-profile",
+  "strict": true,
+  "routes": [
+    {
+      "name": "bad-profile",
+      "match": "^blk\\.",
+      "target": "cpu"
+    }
+  ]
+}

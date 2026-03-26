@@ -10,6 +10,7 @@
 #endif
 
 #include "common.h"
+#include "hybrid-manifest.h"
 // Change JSON_ASSERT from assert() to GGML_ASSERT:
 #define JSON_ASSERT GGML_ASSERT
 #include "llama-vocab.h"
@@ -522,6 +523,20 @@ bool gpt_params_parse(int argc, char ** argv, gpt_params & params) {
 }
 
 namespace {
+void normalize_tensor_override_terminator(std::vector<llama_model_tensor_buft_override> & overrides) {
+    while (!overrides.empty() && overrides.back().pattern == nullptr) {
+        overrides.pop_back();
+    }
+}
+
+void set_process_env(const std::string & key, const std::string & value) {
+#ifdef _WIN32
+    _putenv_s(key.c_str(), value.c_str());
+#else
+    setenv(key.c_str(), value.c_str(), 1);
+#endif
+}
+
 bool parse_buft_overrides(const std::string& value, std::vector<llama_model_tensor_buft_override>& overrides) {
     /* static */ std::map<std::string, ggml_backend_buffer_type_t> buft_list;
     if (buft_list.empty()) {
@@ -572,6 +587,64 @@ std::vector<std::pair<T1,T2>> string_split_pairs(const std::string & str, char d
         i++;
     }
     return values;
+}
+
+void maybe_apply_hybrid_manifest(gpt_params & params) {
+    const auto manifest_path = common_hybrid_manifest::discover_manifest_path(params.model, params.hybrid_manifest);
+    if (!manifest_path.has_value()) {
+        return;
+    }
+
+    auto manifest = common_hybrid_manifest::load_manifest(*manifest_path);
+    if (params.hybrid_strict) {
+        manifest.strict = true;
+    }
+
+    const auto resolved_plan = common_hybrid_manifest::resolve_plan(manifest);
+    const auto plan_json = common_hybrid_manifest::plan_to_json(resolved_plan);
+
+    const std::string hybrid_pattern = common_hybrid_manifest::get_hybrid_pattern_env(resolved_plan);
+    if (!hybrid_pattern.empty()) {
+        set_process_env("HYBRID_PATTERN", hybrid_pattern);
+    }
+
+    if (!params.hybrid_dump_plan.empty()) {
+        std::ofstream out(params.hybrid_dump_plan);
+        if (!out) {
+            throw std::runtime_error(format("failed to write hybrid plan to '%s'", params.hybrid_dump_plan.c_str()));
+        }
+        out << plan_json.dump(2) << "\n";
+    }
+
+    if (params.hybrid_dry_run) {
+        fprintf(stdout, "%s\n", plan_json.dump(2).c_str());
+    }
+
+    normalize_tensor_override_terminator(params.tensor_buft_overrides);
+
+    std::vector<llama_model_tensor_buft_override> manifest_overrides;
+    for (const auto & entry : resolved_plan.entries) {
+        if (entry.target != "cpu") {
+            continue;
+        }
+        manifest_overrides.push_back({
+            strdup(entry.match.c_str()),
+            ggml_backend_cpu_buffer_type(),
+        });
+    }
+
+    if (!manifest_overrides.empty()) {
+        manifest_overrides.insert(
+            manifest_overrides.end(),
+            params.tensor_buft_overrides.begin(),
+            params.tensor_buft_overrides.end());
+        params.tensor_buft_overrides = std::move(manifest_overrides);
+    }
+
+    normalize_tensor_override_terminator(params.tensor_buft_overrides);
+    if (!params.tensor_buft_overrides.empty()) {
+        params.tensor_buft_overrides.push_back({nullptr, nullptr});
+    }
 }
 }
 
@@ -1483,6 +1556,24 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "--cpu-moe" || arg == "-cmoe") {
         params.tensor_buft_overrides.push_back({strdup("\\.ffn_(up|down|gate|gate_up)_exps\\.weight"), ggml_backend_cpu_buffer_type()});
+        return true;
+    }
+    if (arg == "--hybrid-manifest") {
+        CHECK_ARG
+        params.hybrid_manifest = argv[i];
+        return true;
+    }
+    if (arg == "--hybrid-strict") {
+        params.hybrid_strict = true;
+        return true;
+    }
+    if (arg == "--hybrid-dry-run") {
+        params.hybrid_dry_run = true;
+        return true;
+    }
+    if (arg == "--hybrid-dump-plan") {
+        CHECK_ARG
+        params.hybrid_dump_plan = argv[i];
         return true;
     }
     if (arg == "--n-cpu-moe" || arg == "-ncmoe") {
@@ -2471,6 +2562,10 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --run-time-repack",      "repack tensors if interleaved variant is available"});
     options.push_back({ "*",           "       --cpu-moe",              "keep all MoE weights in CPU memory"});
     options.push_back({ "*",           "       --n-cpu-moe N",          "keep MoE weights of the first N layers in CPU memory"});
+    options.push_back({ "*",           "       --hybrid-manifest FILE", "load hybrid routing manifest from FILE or default model sidecar"});
+    options.push_back({ "*",           "       --hybrid-strict",        "fail on hybrid manifest validation problems instead of silently continuing"});
+    options.push_back({ "*",           "       --hybrid-dry-run",       "print the resolved hybrid routing plan before model load"});
+    options.push_back({ "*",           "       --hybrid-dump-plan FILE","write the resolved hybrid routing plan JSON to FILE"});
     options.push_back({ "*",           "       --numa TYPE",            "attempt optimizations that help on some NUMA systems\n"
                                                                         "  - distribute: spread execution evenly over all nodes\n"
                                                                         "  - isolate: only spawn threads on CPUs on the node that execution started on\n"
@@ -3109,6 +3204,7 @@ std::string fs_get_cache_file(const std::string & filename) {
 //
 struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
     llama_init_result iparams;
+    maybe_apply_hybrid_manifest(params);
     auto mparams = common_model_params_to_llama(params);
 
     llama_model * model = nullptr;

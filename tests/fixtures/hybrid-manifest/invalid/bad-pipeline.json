@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "profile": "dense-balanced",
+  "strict": true,
+  "npu_pattern": ["NOT_A_REAL_PIPELINE"],
+  "routes": [
+    {
+      "name": "broken-pipeline",
+      "match": "^blk\\.",
+      "target": "default"
+    }
+  ]
+}

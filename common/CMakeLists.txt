@@ -61,6 +61,8 @@ add_library(${TARGET} STATIC
 	chat-peg-parser.cpp
     chat-peg-parser.h
     common.cpp
+    hybrid-manifest.cpp
+    hybrid-manifest.h
     sampling.h
     sampling.cpp
     console.h

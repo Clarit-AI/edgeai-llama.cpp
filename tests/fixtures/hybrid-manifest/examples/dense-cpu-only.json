@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "profile": "dense-cpu-only",
+  "strict": true,
+  "routes": [
+    {
+      "name": "all-blocks-cpu",
+      "match": "^blk\\.[0-9]+\\.",
+      "target": "cpu"
+    }
+  ]
+}

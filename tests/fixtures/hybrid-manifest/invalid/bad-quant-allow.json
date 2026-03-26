@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "profile": "dense-balanced",
+  "strict": true,
+  "routes": [
+    {
+      "name": "bad-quant",
+      "match": "^blk\\.",
+      "target": "default",
+      "quant_allow": ["iq2_k", "iq3_k"]
+    }
+  ]
+}

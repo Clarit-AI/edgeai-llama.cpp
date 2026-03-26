@@ -200,6 +200,7 @@ llama_build_and_test(
     peg-parser/tests.h
 )
 llama_build_and_test(test-regex-partial.cpp)
+llama_build_and_test(test-hybrid-manifest.cpp WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
 # llama_target_and_test(test-opt.cpp) # SLOW
 
