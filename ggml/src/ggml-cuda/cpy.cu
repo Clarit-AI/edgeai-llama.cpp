@@ -166,7 +166,7 @@ static __global__ void cpy_q_f32(const char * cx, char * cdst_direct, const int 
 // Copy destination pointers to GPU to be available when pointer indirection is in use
 
 void ggml_cuda_cpy_dest_ptrs_copy(ggml_cuda_graph * cuda_graph, char ** host_dest_ptrs, const int host_dest_ptrs_size, cudaStream_t stream) {
-#if defined(GGML_CUDA_USE_GRAPHS) || defined(GGML_HIP_GRAPHS) || defined(GGML_MUSA_GRAPHS)
+#ifdef USE_CUDA_GRAPH
     if (cuda_graph->dest_ptrs_size < host_dest_ptrs_size) { // (re-)allocate GPU memory for destination pointers
         CUDA_CHECK(cudaStreamSynchronize(stream));
         if (cuda_graph->dest_ptrs_d != nullptr) {
@@ -541,7 +541,7 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
 
     char ** dest_ptrs_d = nullptr;
     int graph_cpynode_index = -1;
-#if defined(GGML_CUDA_USE_GRAPHS) || defined(GGML_HIP_GRAPHS) || defined(GGML_MUSA_GRAPHS)
+#ifdef USE_CUDA_GRAPH
     if(!disable_indirection_for_this_node && ctx.cur_graph && ctx.cur_graph->use_cpy_indirection) {
         dest_ptrs_d = ctx.cur_graph->dest_ptrs_d;
         graph_cpynode_index = ctx.cur_graph->graph_cpynode_index;
@@ -650,7 +650,7 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
         GGML_ABORT("%s: unsupported type combination (%s to %s)\n", __func__,
                 ggml_type_name(src0->type), ggml_type_name(src1->type));
     }
-#if defined(GGML_CUDA_USE_GRAPHS) || defined(GGML_HIP_GRAPHS) || defined(GGML_MUSA_GRAPHS)
+#ifdef USE_CUDA_GRAPH
     if(!disable_indirection_for_this_node && ctx.cur_graph && ctx.cur_graph->use_cpy_indirection) {
         ctx.cur_graph->graph_cpynode_index = graph_cpynode_index;
     }
@@ -795,7 +795,7 @@ bool ggml_cuda_cpy_2(ggml_backend_cuda_context & ctx, const ggml_tensor * src1, 
 
     char ** dest_ptrs = nullptr;
     int graph_cpynode_index = -1;
-#if defined(GGML_CUDA_USE_GRAPHS) || defined(GGML_HIP_GRAPHS) || defined(GGML_MUSA_GRAPHS)
+#ifdef USE_CUDA_GRAPH
     if(ctx.cur_graph && ctx.cur_graph->use_cpy_indirection && !disable_indirection) {
         dest_ptrs = ctx.cur_graph->dest_ptrs_d;
         graph_cpynode_index = ctx.cur_graph->graph_cpynode_index;
@@ -812,7 +812,7 @@ bool ggml_cuda_cpy_2(ggml_backend_cuda_context & ctx, const ggml_tensor * src1, 
                 (char *)dst1->data, (char *)dst2->data, nelem, ctx.stream(), dest_ptrs, graph_cpynode_index);
     }
 
-#if defined(GGML_CUDA_USE_GRAPHS) || defined(GGML_HIP_GRAPHS) || defined(GGML_MUSA_GRAPHS)
+#ifdef USE_CUDA_GRAPH
     if(ctx.cur_graph && ctx.cur_graph->use_cpy_indirection && !disable_indirection) {
         ctx.cur_graph->graph_cpynode_index = graph_cpynode_index;
     }
@@ -858,7 +858,7 @@ bool ggml_cuda_concat_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * c
 
     char ** dest_ptrs = nullptr;
     int graph_cpynode_index = -1;
-#if defined(GGML_CUDA_USE_GRAPHS) || defined(GGML_HIP_GRAPHS) || defined(GGML_MUSA_GRAPHS)
+#ifdef USE_CUDA_GRAPH
     if(ctx.cur_graph && ctx.cur_graph->use_cpy_indirection && !disable_indirection) {
         dest_ptrs = ctx.cur_graph->dest_ptrs_d;
         graph_cpynode_index = ctx.cur_graph->graph_cpynode_index;
@@ -873,7 +873,7 @@ bool ggml_cuda_concat_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * c
                 (char *)dst->data, concat->src[0]->ne[0], dst->ne[0], ctx.stream(), dest_ptrs, graph_cpynode_index);
     }
 
-#if defined(GGML_CUDA_USE_GRAPHS) || defined(GGML_HIP_GRAPHS) || defined(GGML_MUSA_GRAPHS)
+#ifdef USE_CUDA_GRAPH
     if(ctx.cur_graph && ctx.cur_graph->use_cpy_indirection && !disable_indirection) {
         ctx.cur_graph->graph_cpynode_index = graph_cpynode_index;
     }
