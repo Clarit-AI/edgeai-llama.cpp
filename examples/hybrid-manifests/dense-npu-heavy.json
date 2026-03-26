@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "profile": "dense-balanced",
+  "strict": true,
+  "npu_pattern": ["FP16_STANDARD", "INT8_STANDARD", "FP16_STANDARD"],
+  "routes": [
+    {
+      "name": "npu-heavy-attention",
+      "match": "^blk\\.[0-9]+\\.attn_",
+      "target": "default",
+      "pipeline": "FP16_STANDARD",
+      "quant_allow": ["f16", "q8_0"],
+      "shape": {
+        "k_divisible_by": 32,
+        "n_divisible_by": 32
+      }
+    },
+    {
+      "name": "npu-heavy-ffn",
+      "match": "^blk\\.[0-9]+\\.ffn_(up|down|gate)\\.",
+      "target": "default",
+      "pipeline": "INT8_STANDARD",
+      "quant_allow": ["f16", "q8_0"],
+      "shape": {
+        "k_divisible_by": 32,
+        "n_divisible_by": 32
+      }
+    }
+  ]
+}

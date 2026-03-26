@@ -7,6 +7,7 @@ This directory contains documentation for the RKNPU2 backend that provides neura
 - [Getting Started](GETTING_STARTED.md) - Quick start guide for building and running
 - [Environment Variables](ENVIRONMENT.md) - Configuration via environment variables
 - [Performance Tuning](PERFORMANCE.md) - Optimization and benchmarking
+- [Hybrid Runtime Validation](HYBRID_RUNTIME_VALIDATION.md) - ROCK 5 phase-3 benchmark workflow
 - [Testing Guide](TESTING.md) - Comprehensive test plan for verification
 
 ## Overview

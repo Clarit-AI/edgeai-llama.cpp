@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "profile": "moe-balanced",
+  "strict": true,
+  "npu_pattern": ["FP16_STANDARD", "INT8_STANDARD", "INT4_HADAMARD"],
+  "routes": [
+    {
+      "name": "cpu-routed-experts",
+      "match": "\\.ffn_(up|down|gate|gate_up)_exps\\.weight$",
+      "target": "cpu"
+    },
+    {
+      "name": "moe-dense-backbone",
+      "match": "^blk\\.[0-9]+\\.(attn|ffn_(up|down|gate))\\.",
+      "target": "default",
+      "pipeline": "INT8_STANDARD",
+      "quant_allow": ["f16", "q8_0"],
+      "shape": {
+        "k_divisible_by": 32,
+        "n_divisible_by": 32
+      }
+    }
+  ]
+}
