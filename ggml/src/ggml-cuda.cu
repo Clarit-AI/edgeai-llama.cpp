@@ -1263,15 +1263,26 @@ static void * ggml_cuda_host_malloc(size_t size) {
     if (getenv("GGML_CUDA_NO_PINNED") != nullptr) {
         return nullptr;
     }
+    constexpr double k_warn_limit = 8.0;
 
     void * ptr = nullptr;
+    double size_GiB = size/(1024.*1024.*1024.);
+    auto tim1 = ggml_time_us();
+    if (size_GiB > k_warn_limit) {
+        GGML_CUDA_LOG_INFO("Allocating %.2f GiB of pinned host memory, this can take a while...\n", size_GiB);
+    }
     cudaError_t err = cudaMallocHost((void **) &ptr, size);
     if (err != cudaSuccess) {
         // clear the error
         cudaGetLastError();
+        GGML_CUDA_LOG_ERROR("%s: cudaMallocHost failed with code %d: %s\n", __func__, err, cudaGetErrorString(err));
         GGML_CUDA_LOG_WARN("%s: failed to allocate %.2f MiB of pinned memory: %s\n", __func__,
                            size / 1024.0 / 1024.0, cudaGetErrorString(err));
         return nullptr;
+    }
+    if (size_GiB > k_warn_limit) {
+        auto tim2 = ggml_time_us();
+        GGML_CUDA_LOG_INFO("    done allocating %.2f GiB in %.1f ms\n", size_GiB, 1e-3*(tim2-tim1));
     }
 
     return ptr;
