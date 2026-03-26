@@ -1083,6 +1083,23 @@ void llama_model_loader::build_hybrid_plan() {
         const std::string role = route.role;
         const std::string type_name = lower_copy(ggml_type_name(weight.tensor->type));
 
+        // Applies the CPU fallback declared on a manifest rule that could not be
+        // satisfied by the NPU.  Returns true when the fallback was applied (the
+        // caller should then return true from route_from_manifest so that override
+        // and legacy logic is skipped, preserving manifest->override->legacy order).
+        auto apply_npu_fallback = [&](const hybrid_manifest_rule & rule,
+                                      const std::string & rejection_reason) -> bool {
+            if (rule.fallback == "cpu") {
+                route.buft        = ggml_backend_cpu_buffer_type();
+                route.backend_name = "cpu";
+                route.source      = LLAMA_HYBRID_ROUTE_SOURCE_MANIFEST;
+                route.reason      = format("%s; manifest fallback to cpu", rejection_reason.c_str());
+                return true;
+            }
+            route.reason = rejection_reason;
+            return false;
+        };
+
         for (const auto & rule : manifest.rules) {
             if (!std::regex_search(tensor_name, rule.match_re)) {
                 continue;
@@ -1098,7 +1115,13 @@ void llama_model_loader::build_hybrid_plan() {
                     throw std::runtime_error(format("hybrid rule '%s' rejects tensor '%s' type %s",
                             rule.name.c_str(), tensor_name.c_str(), type_name.c_str()));
                 }
-                route.reason = format("rule '%s' rejected tensor type %s", rule.name.c_str(), type_name.c_str());
+                const std::string rej = format("rule '%s' rejected tensor type %s", rule.name.c_str(), type_name.c_str());
+                // The other NPU rejection paths are inside `if (backend == "npu")` below,
+                // so the check is implicit there.  Here we haven't read `backend` yet.
+                if (lower_copy(rule.backend) == "npu" && apply_npu_fallback(rule, rej)) {
+                    return true;
+                }
+                route.reason = rej;
                 continue;
             }
 
@@ -1118,7 +1141,9 @@ void llama_model_loader::build_hybrid_plan() {
                         throw std::runtime_error(format("hybrid rule '%s' requires an NPU pipeline for tensor '%s'",
                                 rule.name.c_str(), tensor_name.c_str()));
                     }
-                    route.reason = format("rule '%s' has no usable NPU pipeline", rule.name.c_str());
+                    if (apply_npu_fallback(rule, format("rule '%s' has no usable NPU pipeline", rule.name.c_str()))) {
+                        return true;
+                    }
                     continue;
                 }
 
@@ -1130,7 +1155,9 @@ void llama_model_loader::build_hybrid_plan() {
                         throw std::runtime_error(format("hybrid rule '%s' has incompatible shape for tensor '%s'",
                                 rule.name.c_str(), tensor_name.c_str()));
                     }
-                    route.reason = format("rule '%s' rejected tensor '%s' due to alignment/shape", rule.name.c_str(), tensor_name.c_str());
+                    if (apply_npu_fallback(rule, format("rule '%s' rejected tensor '%s' due to alignment/shape", rule.name.c_str(), tensor_name.c_str()))) {
+                        return true;
+                    }
                     continue;
                 }
 
@@ -1138,7 +1165,9 @@ void llama_model_loader::build_hybrid_plan() {
                     if (hybrid_strict || rule.required) {
                         throw std::runtime_error("RKNPU backend buffer type is unavailable");
                     }
-                    route.reason = format("rule '%s' requested NPU but RKNPU backend is unavailable", rule.name.c_str());
+                    if (apply_npu_fallback(rule, format("rule '%s' requested NPU but RKNPU backend is unavailable", rule.name.c_str()))) {
+                        return true;
+                    }
                     continue;
                 }
 
