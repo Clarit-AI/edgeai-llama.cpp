@@ -760,6 +760,7 @@ GGML_CALL ggml_backend_buffer_type_t ggml_backend_cuda_buffer_type(int device) {
         for (int i = 0; i < GGML_CUDA_MAX_DEVICES; i++) {
             ggml_backend_cuda_buffer_types[i] = {
                 /* .iface    = */ ggml_backend_cuda_buffer_type_interface,
+                /* .device   = */ nullptr,
                 /* .context  = */ new ggml_backend_cuda_buffer_type_context{i, GGML_CUDA_NAME + std::to_string(i)},
             };
         }
@@ -1234,6 +1235,7 @@ static ggml_backend_buffer_type_i ggml_backend_cuda_split_buffer_type_interface 
 GGML_CALL ggml_backend_buffer_type_t ggml_backend_cuda_split_buffer_type(const float * /*tensor_split*/) {
     static ggml_backend_buffer_type buft {
         /* .iface   = */ ggml_backend_cuda_split_buffer_type_interface,
+        /* .device  = */ nullptr,
         /* .context = */ new ggml_backend_cuda_split_buffer_type_context{}, //{tensor_split_arr},
     };
     return &buft;
@@ -1301,6 +1303,7 @@ GGML_CALL ggml_backend_buffer_type_t ggml_backend_cuda_host_buffer_type() {
             /* .get_alloc_size   = */ ggml_backend_cpu_buffer_type()->iface.get_alloc_size,
             /* .is_host          = */ ggml_backend_cpu_buffer_type()->iface.is_host,
         },
+        /* .device   = */ nullptr,
         /* .context  = */ nullptr,
     };
 
@@ -5068,7 +5071,7 @@ GGML_CALL int ggml_backend_cuda_reg_devices() {
     for (int i = 0; i < device_count; i++) {
         char name[128];
         snprintf(name, sizeof(name), "%s%d", GGML_CUDA_NAME, i);
-        ggml_backend_register(name, ggml_backend_reg_cuda_init, ggml_backend_cuda_buffer_type(i), (void *) (intptr_t) i);
+        ggml_backend_register(name, ggml_backend_reg_cuda_init, ggml_backend_cuda_buffer_type(i), (void *) (intptr_t) i, GGML_BACKEND_DEVICE_TYPE_GPU);
     }
     return device_count;
 }
