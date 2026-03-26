@@ -48,8 +48,7 @@ EOF
 
 require_option_value() {
     local option=$1
-    shift
-    if [[ $# -lt 1 || -z "${1:-}" ]]; then
+    if [[ $# -lt 2 || -z "${2:-}" ]]; then
         echo "Error: ${option} requires a value" >&2
         exit 1
     fi
@@ -74,33 +73,33 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --sync-branch)
-            require_option_value "$1" "${2:-}"
-            SYNC_BRANCH="${2:-}"
+            require_option_value "$1" "$@"
+            SYNC_BRANCH="$2"
             shift 2
             ;;
         --main-branch)
-            require_option_value "$1" "${2:-}"
-            MAIN_BRANCH="${2:-}"
+            require_option_value "$1" "$@"
+            MAIN_BRANCH="$2"
             shift 2
             ;;
         --ik-remote)
-            require_option_value "$1" "${2:-}"
-            IK_REMOTE="${2:-}"
+            require_option_value "$1" "$@"
+            IK_REMOTE="$2"
             shift 2
             ;;
         --ik-branch)
-            require_option_value "$1" "${2:-}"
-            IK_BRANCH="${2:-}"
+            require_option_value "$1" "$@"
+            IK_BRANCH="$2"
             shift 2
             ;;
         --rk-remote)
-            require_option_value "$1" "${2:-}"
-            RK_REMOTE="${2:-}"
+            require_option_value "$1" "$@"
+            RK_REMOTE="$2"
             shift 2
             ;;
         --rk-branch)
-            require_option_value "$1" "${2:-}"
-            RK_BRANCH="${2:-}"
+            require_option_value "$1" "$@"
+            RK_BRANCH="$2"
             shift 2
             ;;
         -h|--help)
