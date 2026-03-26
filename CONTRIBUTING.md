@@ -13,6 +13,7 @@
 - Squash-merge PRs
 - Use the following format for the squashed commit title: `<module> : <commit title> (#<issue_number>)`. For example: `utils : fix typo in utils.py (#1234)`
 - Optionally, pick a `<module>` from here: https://github.com/ggerganov/llama.cpp/wiki/Modules
+- Keep `main` aligned through the documented dual-upstream workflow: [docs/development/dual-upstream-sync.md](docs/development/dual-upstream-sync.md)
 
 # Coding guidelines
 
@@ -26,4 +27,3 @@
 - Matrix multiplication is unconventional: [`C = ggml_mul_mat(ctx, A, B)`](https://github.com/ggerganov/llama.cpp/blob/880e352277fc017df4d5794f0c21c44e1eae2b84/ggml.h#L1058-L1064) means $C^T = A B^T \Leftrightarrow C = B A^T.$
 
 ![matmul](media/matmul.png)
-

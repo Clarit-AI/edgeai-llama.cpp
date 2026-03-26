@@ -288,6 +288,7 @@ Contributions in form of pull requests, issue submissions (bug reports, feature 
 
 - [How to build](docs/build.md)
 - [Running on Docker](docs/docker.md)
+- [Dual-upstream sync workflow](docs/development/dual-upstream-sync.md)
 - [Performance troubleshooting](docs/development/token_generation_performance_tips.md)
 - [GGML tips & tricks](https://github.com/ggml-org/llama.cpp/wiki/GGML-Tips-&-Tricks)
 
