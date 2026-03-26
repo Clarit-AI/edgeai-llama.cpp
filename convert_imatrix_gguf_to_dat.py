@@ -74,6 +74,9 @@ class IMatrixDatWriter:
                     denom = counts.reshape(()).astype(np.float32)
                     if float(denom) > 0:
                         weights = values / denom
+                    else:
+                        weights = np.zeros_like(values)
+                        logger.warning("Non-positive count (%s) for %s, setting weights to zero", denom, name)
                 else:
                     try:
                         weights = np.divide(
@@ -88,7 +91,10 @@ class IMatrixDatWriter:
                             f"over values with shape {values.shape} for {name}"
                         ) from exc
 
-                ncall = 0
+                # Use chunk_count as ncall for legacy .dat round-trip semantics.
+                # For pre-averaged weights (counts.size > 1), ncall=0 signals
+                # the loader not to divide again.
+                ncall = self.chunk_count if counts.size == 1 else 0
                 flat_weights = np.asarray(weights, dtype=np.float32).reshape(-1)
                 np.array([ncall], dtype=np.int32).tofile(f)
                 np.array([flat_weights.size], dtype=np.int32).tofile(f)
