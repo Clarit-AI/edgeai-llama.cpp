@@ -15,6 +15,7 @@
 #include <omp.h>
 
 #include <chrono>
+#include <atomic>
 #include <cassert>
 #include <cstring>
 #include <cstdlib>
@@ -534,14 +535,12 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
         // ==========================================
         {
             std::atomic<bool> had_error{false};
-            int error_code = 0;
             #pragma omp parallel for num_threads(num_active_segments)
             for (size_t idx = 0; idx < num_active_segments; idx++) {
                 int ret = rknn_matmul_run(matmul_ctxs[idx]->ctx);
                 if (ret != RKNN_SUCC) {
                     had_error = true;
-                    error_code = ret;
-                    fprintf(stderr, "RKNPU2: rknn_matmul_run failed for segment %zu, ret=%d\n", i, ret);
+                    fprintf(stderr, "RKNPU2: rknn_matmul_run failed for segment %zu, ret=%d\n", idx, ret);
                 }
             }
             if (had_error) {
@@ -642,10 +641,9 @@ static void * ggml_backend_rknpu_buffer_get_base(ggml_backend_buffer_t buffer) {
     return ctx->dma_buf.virt_addr;
 }
 
-static enum ggml_status ggml_backend_rknpu_buffer_init_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor) {
+static void ggml_backend_rknpu_buffer_init_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor) {
     UNUSED(buffer);
     UNUSED(tensor);
-    return GGML_STATUS_SUCCESS;
 }
 
 // Function for dequantizing GGUF format to FP32 and optionally applying Hadamard transform
@@ -944,6 +942,25 @@ static size_t ggml_backend_rknpu_buffer_type_get_alloc_size(ggml_backend_buffer_
     return ggml_nbytes(tensor);
 }
 
+static ggml_backend_buffer_type_t ggml_backend_rknpu_buffer_type(void) {
+    static const struct ggml_backend_buffer_type_i rknpu_buffer_type_interface = {
+        /* .get_name       = */ ggml_backend_rknpu_buffer_type_get_name,
+        /* .alloc_buffer   = */ ggml_backend_rknpu_buffer_type_alloc_buffer,
+        /* .get_alignment  = */ ggml_backend_rknpu_buffer_type_get_alignment,
+        /* .get_max_size   = */ NULL,
+        /* .get_alloc_size = */ ggml_backend_rknpu_buffer_type_get_alloc_size,
+        /* .is_host        = */ NULL,
+    };
+
+    static struct ggml_backend_buffer_type rknpu_buffer_type = {
+        /* .iface   = */ rknpu_buffer_type_interface,
+        /* .device  = */ NULL,
+        /* .context = */ NULL,
+    };
+
+    return &rknpu_buffer_type;
+}
+
 
 //
 // Device
@@ -1124,6 +1141,21 @@ static bool ggml_backend_rknpu_device_supports_op(ggml_backend_dev_t dev, const 
     }
 }
 
+static ggml_backend_buffer_type_t ggml_backend_rknpu_get_default_buffer_type(ggml_backend_t backend) {
+    UNUSED(backend);
+    return ggml_backend_rknpu_buffer_type();
+}
+
+static bool ggml_backend_rknpu_supports_op(ggml_backend_t backend, const struct ggml_tensor * op) {
+    UNUSED(backend);
+    return ggml_backend_rknpu_device_supports_op(NULL, op);
+}
+
+static bool ggml_backend_rknpu_supports_buft(ggml_backend_t backend, ggml_backend_buffer_type_t buft) {
+    UNUSED(backend);
+    return buft == ggml_backend_rknpu_buffer_type();
+}
+
 static ggml_backend_t ggml_backend_rknpu_device_init_backend(ggml_backend_dev_t dev, const char * params) {
     UNUSED(dev);
     UNUSED(params);
@@ -1144,26 +1176,31 @@ static ggml_backend_t ggml_backend_rknpu_device_init_backend(ggml_backend_dev_t 
     fprintf(stderr, "RKNPU2: Using device '%s' with core_mask=%d, split_factor=%d\n", device_name, ctx->core_mask, ctx->split_factor);
     
     static const struct ggml_backend_i rknpu_backend_interface = {
-        /* .get_name           = */ ggml_backend_rknpu_name,
-        /* .free               = */ ggml_backend_rknpu_free,
-        /* .set_tensor_async   = */ NULL,
-        /* .get_tensor_async   = */ NULL,
-        /* .cpy_tensor_async   = */ NULL,
-        /* .synchronize        = */ NULL,
-        /* .graph_plan_create  = */ NULL,
-        /* .graph_plan_free    = */ NULL,
-        /* .graph_plan_update  = */ NULL,
-        /* .graph_plan_compute = */ NULL,
-        /* .graph_compute      = */ ggml_backend_rknpu_graph_compute,
-        /* .event_record       = */ NULL,
-        /* .event_wait         = */ NULL,
-        /* .graph_optimize     = */ NULL,
+        /* .get_name                = */ ggml_backend_rknpu_name,
+        /* .free                    = */ ggml_backend_rknpu_free,
+        /* .get_default_buffer_type = */ ggml_backend_rknpu_get_default_buffer_type,
+        /* .set_tensor_async        = */ NULL,
+        /* .get_tensor_async        = */ NULL,
+        /* .cpy_tensor_async        = */ NULL,
+        /* .synchronize             = */ NULL,
+        /* .graph_plan_create       = */ NULL,
+        /* .graph_plan_free         = */ NULL,
+        /* .graph_plan_update       = */ NULL,
+        /* .graph_plan_compute      = */ NULL,
+        /* .graph_compute           = */ ggml_backend_rknpu_graph_compute,
+        /* .supports_op             = */ ggml_backend_rknpu_supports_op,
+        /* .supports_buft           = */ ggml_backend_rknpu_supports_buft,
+        /* .offload_op              = */ NULL,
+        /* .event_new               = */ NULL,
+        /* .event_free              = */ NULL,
+        /* .event_record            = */ NULL,
+        /* .event_wait              = */ NULL,
+        /* .event_synchronize       = */ NULL,
     };
 
     return new ggml_backend{
         /* .guid    = */ {0},
         /* .iface   = */ rknpu_backend_interface,
-        /* .device  = */ dev,
         /* .context = */ ctx,
     };
 }
@@ -1191,20 +1228,7 @@ static ggml_backend_dev_t ggml_backend_rknpu_reg_get_device(ggml_backend_reg_t r
         return NULL;
     }
 
-    static const struct ggml_backend_buffer_type_i rknpu_buffer_type_interface = {
-        /* .get_name       = */ ggml_backend_rknpu_buffer_type_get_name,
-        /* .alloc_buffer   = */ ggml_backend_rknpu_buffer_type_alloc_buffer,
-        /* .get_alignment  = */ ggml_backend_rknpu_buffer_type_get_alignment,
-        /* .get_max_size   = */ NULL,
-        /* .get_alloc_size = */ ggml_backend_rknpu_buffer_type_get_alloc_size,
-        /* .is_host        = */ NULL,
-    };
-
-    static struct ggml_backend_buffer_type rknpu_buffer_type = {
-        /* .iface   = */ rknpu_buffer_type_interface,
-        /* .device  = */ NULL,
-        /* .context = */ NULL,
-    };
+    ggml_backend_buffer_type_t rknpu_buffer_type = ggml_backend_rknpu_buffer_type();
 
     static const struct ggml_backend_device_i rknpu_device_interface = {
         /* .get_name             = */ ggml_backend_rknpu_device_get_name,
@@ -1213,15 +1237,10 @@ static ggml_backend_dev_t ggml_backend_rknpu_reg_get_device(ggml_backend_reg_t r
         /* .get_type             = */ ggml_backend_rknpu_device_get_type,
         /* .get_props            = */ ggml_backend_rknpu_device_get_props,
         /* .init_backend         = */ ggml_backend_rknpu_device_init_backend,
-        /* .get_buffer_type      = */ [](ggml_backend_dev_t dev) { UNUSED(dev); return &rknpu_buffer_type; },
-        /* .get_host_buffer_type = */ NULL,
-        /* .buffer_from_host_ptr = */ NULL,
+        /* .get_buffer_type      = */ [](ggml_backend_dev_t dev) { UNUSED(dev); return ggml_backend_rknpu_buffer_type(); },
         /* .supports_op          = */ ggml_backend_rknpu_device_supports_op,
-        /* .supports_buft        = */ [](ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) { UNUSED(dev); return buft == &rknpu_buffer_type; },
+        /* .supports_buft        = */ [](ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) { UNUSED(dev); return buft == ggml_backend_rknpu_buffer_type(); },
         /* .offload_op           = */ NULL,
-        /* .event_new            = */ NULL,
-        /* .event_free           = */ NULL,
-        /* .event_synchronize    = */ NULL,
     };
 
     static struct ggml_backend_device rknpu_device = {
@@ -1230,8 +1249,8 @@ static ggml_backend_dev_t ggml_backend_rknpu_reg_get_device(ggml_backend_reg_t r
         /* .context = */ NULL,
     };
 
-    if (rknpu_buffer_type.device == NULL) {
-        rknpu_buffer_type.device = &rknpu_device;
+    if (rknpu_buffer_type->device == NULL) {
+        rknpu_buffer_type->device = &rknpu_device;
     }
 
     return &rknpu_device;

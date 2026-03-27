@@ -500,6 +500,20 @@ if (GGML_RKNPU2)
             ${CMAKE_CURRENT_SOURCE_DIR}/ggml-rknpu2/libs
         )
 
+        find_library(RKNN_RUNTIME_LIBRARY
+            NAMES rknnrt
+            PATHS
+                ${CMAKE_CURRENT_SOURCE_DIR}/ggml-rknpu2/libs
+                /lib/aarch64-linux-gnu
+                /usr/lib/aarch64-linux-gnu
+                /lib
+                /usr/lib
+        )
+        if (NOT RKNN_RUNTIME_LIBRARY)
+            message(FATAL_ERROR "RKNPU2 runtime library not found. Install librknnrt or provide it under ggml/src/ggml-rknpu2/libs.")
+        endif()
+        list(APPEND GGML_EXTRA_LIBS ${RKNN_RUNTIME_LIBRARY})
+
         find_package(OpenMP)
         if (OpenMP_FOUND)
             add_compile_definitions(HAVE_OPENMP=1)

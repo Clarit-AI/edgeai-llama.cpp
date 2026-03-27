@@ -1691,14 +1691,18 @@ static int ggml_backend_sched_backend_id_from_cur(ggml_backend_sched_t sched, st
         if (src == NULL) {
             continue;
         }
+        int src_backend_id = ggml_backend_sched_backend_from_buffer(sched, src, tensor);
+        if (src_backend_id == -1) {
+            continue;
+        }
         if (src->buffer != NULL && src->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
-            ggml_backend_supports_op(sched->backends[i], tensor)) {
-            if (offload_enabled && ggml_backend_offload_op(sched->backends[i], tensor)) {
+            ggml_backend_supports_op(sched->backends[src_backend_id], tensor)) {
+            if (offload_enabled && ggml_backend_offload_op(sched->backends[src_backend_id], tensor)) {
                 SET_CAUSE(tensor, "1.off");
-                return i;
+                return src_backend_id;
             }
             SET_CAUSE(tensor, "1.wgt%d", i);
-            return i;
+            return src_backend_id;
         }
     }
 
