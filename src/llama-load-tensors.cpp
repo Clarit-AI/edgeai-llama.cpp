@@ -11,6 +11,7 @@
 #include <future>
 #include <regex>
 #include <unordered_set>
+#include <cstring>
 
 #define LLAMA_API_INTERNAL
 
@@ -417,7 +418,6 @@ ggml_context * create_tensors_helper::get_context_for_tensor(ggml_context * ctx,
             return ctx_for_buft(route->buft);
         }
     }
-
     for (auto & o : overrides) {
         if (std::regex_search(name, o.first)) {
             if (o.second == default_cpu_buft) has_buft_overrides = true;
@@ -428,18 +428,6 @@ ggml_context * create_tensors_helper::get_context_for_tensor(ggml_context * ctx,
             break;
         }
     }
-    //if (ml.tensor_buft_overrides) {
-    //    for (const auto * overrides = ml.tensor_buft_overrides; overrides->pattern != nullptr; ++overrides) {
-    //        std::regex pattern(overrides->pattern);
-    //        if (std::regex_search(name, pattern)) {
-    //            const struct ggml_tensor * cur = ml.get_tensor_meta(name.c_str());
-    //            const size_t nbytes = cur ? ggml_nbytes(cur) : 0;
-    //            LLAMA_LOG_INFO("Tensor %s (size = %.2f MiB) buffer type overriden to %s\n", name.c_str(), nbytes/1024./1024., ggml_backend_buft_name(overrides->buft));
-    //            ctx = ctx_for_buft(overrides->buft);
-    //            break;
-    //        }
-    //    }
-    //}
     return ctx;
 }
 

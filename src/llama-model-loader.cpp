@@ -969,6 +969,19 @@ const llama_hybrid_route * llama_model_loader::get_hybrid_route(const char * nam
     return name ? get_hybrid_route(std::string(name)) : nullptr;
 }
 
+bool llama_model_loader::has_hybrid_npu_route() const {
+    return std::any_of(hybrid_plan.begin(), hybrid_plan.end(), [](const llama_hybrid_route & route) {
+        if (route.source == LLAMA_HYBRID_ROUTE_SOURCE_LEGACY || route.buft == nullptr) {
+            return false;
+        }
+        if (lower_copy(route.backend_name) == "npu") {
+            return true;
+        }
+        const char * buft_name = ggml_backend_buft_name(route.buft);
+        return buft_name != nullptr && lower_copy(buft_name) == "rknpu";
+    });
+}
+
 void llama_model_loader::dump_hybrid_plan() const {
     dump_hybrid_plan_impl(true);
 }

@@ -428,6 +428,9 @@ static size_t llama_get_device_count(const llama_model & model) {
     count = ggml_backend_vk_get_device_count();
 #elif defined(GGML_USE_CANN)
     return ggml_backend_cann_get_device_count();
+#elif defined(GGML_USE_RKNPU2)
+    ggml_backend_reg_t reg = ggml_backend_reg_by_name("RKNPU");
+    return reg != nullptr ? ggml_backend_reg_dev_count(reg) : 0;
 #endif
 #if defined(GGML_USE_RPC)
     count += model.rpc_servers.size();
@@ -435,6 +438,42 @@ static size_t llama_get_device_count(const llama_model & model) {
     return count;
     GGML_UNUSED(model);
 }
+
+#if defined(GGML_USE_RKNPU2)
+static ggml_backend_buffer_type_t llama_default_buffer_type_rknpu(int device) {
+    static std::vector<ggml_backend_buffer_type_t> cached_bufts;
+
+    if (device < 0) {
+        return nullptr;
+    }
+
+    ggml_backend_reg_t reg = ggml_backend_reg_by_name("RKNPU");
+    if (reg == nullptr) {
+        return nullptr;
+    }
+
+    size_t dev_count = ggml_backend_reg_dev_count(reg);
+    if ((size_t)device >= dev_count) {
+        return nullptr;
+    }
+
+    if (cached_bufts.size() < dev_count) {
+        cached_bufts.resize(dev_count, nullptr);
+    }
+
+    if (cached_bufts[device] == nullptr) {
+        ggml_backend_dev_t dev = ggml_backend_reg_dev_get(reg, device);
+        ggml_backend_t backend = ggml_backend_init_from_dev(dev, nullptr);
+        if (backend == nullptr) {
+            return nullptr;
+        }
+        cached_bufts[device] = ggml_backend_get_default_buffer_type(backend);
+        ggml_backend_free(backend);
+    }
+
+    return cached_bufts[device];
+}
+#endif
 
 static ggml_backend_buffer_type_t llama_default_buffer_type_offload(const llama_model & model, int gpu) {
     ggml_backend_buffer_type_t buft = nullptr;
@@ -464,6 +503,8 @@ static ggml_backend_buffer_type_t llama_default_buffer_type_offload(const llama_
     }
 #elif defined(GGML_USE_CANN)
     buft = ggml_backend_cann_buffer_type(gpu);
+#elif defined(GGML_USE_RKNPU2)
+    buft = llama_default_buffer_type_rknpu(gpu);
 #endif
 
     if (buft == nullptr) {
@@ -537,6 +578,14 @@ static size_t llama_get_device_memory(const llama_model & model, int device) {
     size_t free;
     ggml_backend_cann_get_device_memory(device, &free, &total);
     return free;
+#elif defined(GGML_USE_RKNPU2)
+    ggml_backend_reg_t reg = ggml_backend_reg_by_name("RKNPU");
+    if (reg != nullptr && (size_t)device < ggml_backend_reg_dev_count(reg)) {
+        ggml_backend_dev_props props;
+        ggml_backend_dev_get_props(ggml_backend_reg_dev_get(reg, device), &props);
+        return props.memory_free;
+    }
+    return 0;
 #else
     return 1;
 #endif
@@ -2267,6 +2316,12 @@ static bool llm_load_tensors(
     model.mtp          = mtp;
 
     size_t mem_margin  = fit_margin > 0 ? size_t(fit_margin)*1024*1024 : k_default_mem_margin;
+#if defined(GGML_USE_RKNPU2)
+    const bool hybrid_rknpu_load = ml.has_hybrid_npu_route() && !model.devices.empty() &&
+        striequals(ggml_backend_buft_name(llama_default_buffer_type_offload(model, model.devices.front())), "RKNPU");
+#else
+    const bool hybrid_rknpu_load = false;
+#endif
 
     const int n_layer     = hparams.n_layer;
     int i_gpu_start = std::max((int) hparams.n_layer - n_gpu_layers, (int) 0);
@@ -2545,7 +2600,8 @@ static bool llm_load_tensors(
     // assign the repeating layers to the devices according to the splits
     if (split_mode == LLAMA_SPLIT_MODE_LAYER) {
         for (int i = i_gpu_start; i < n_layer; ++i) {
-            model.buft_layer[i] = llama_default_buffer_type_offload(model, model.default_layer_device[i]);
+            model.buft_layer[i] = hybrid_rknpu_load ? llama_default_buffer_type_cpu(true) :
+                llama_default_buffer_type_offload(model, model.default_layer_device[i]);
             //int layer_gpu = std::upper_bound(model.splits.begin(), model.splits.begin() + device_count, float(i - i_gpu_start)/act_gpu_layers) - model.splits.begin();
             //model.buft_layer[i] = llama_default_buffer_type_offload(model, model.devices[layer_gpu]);
         }
@@ -2553,7 +2609,8 @@ static bool llm_load_tensors(
         if (n_gpu_layers > n_layer) {
             //int layer_gpu = std::upper_bound(model.splits.begin(), model.splits.begin() + device_count, float(act_gpu_layers - 1)/act_gpu_layers) - model.splits.begin();
             //model.buft_output = llama_default_buffer_type_offload(model, model.devices[layer_gpu]);
-            model.buft_output = llama_default_buffer_type_offload(model, model.default_layer_device[n_layer]);
+            model.buft_output = hybrid_rknpu_load ? llama_default_buffer_type_cpu(true) :
+                llama_default_buffer_type_offload(model, model.default_layer_device[n_layer]);
         } else {
             model.buft_output = llama_default_buffer_type_cpu(true);
         }
@@ -2582,8 +2639,9 @@ static bool llm_load_tensors(
         // assign the output layer
         if (n_gpu_layers > n_layer) {
             model.buft_output = {
-                split_buft,
-                llama_default_buffer_type_offload(model, model.default_layer_device[n_layer])
+                hybrid_rknpu_load ? llama_default_buffer_type_cpu(true) : split_buft,
+                hybrid_rknpu_load ? llama_default_buffer_type_cpu(true) :
+                    llama_default_buffer_type_offload(model, model.default_layer_device[n_layer])
             };
         } else {
             model.buft_output = llama_default_buffer_type_cpu(true);
@@ -2611,6 +2669,36 @@ static bool llm_load_tensors(
     use_mmap_buffer = cth->create_tensors();
     if (!use_mmap_buffer) {
         ml.use_mmap = false;
+    }
+
+    if (hybrid_model_tensor_routing) {
+        size_t cpu_bytes = 0;
+        size_t rknpu_bytes = 0;
+        size_t cpu_tensors = 0;
+        size_t rknpu_tensors = 0;
+
+        for (const auto & it : ctx_map) {
+            const char * buft_name = ggml_backend_buft_name(it.first);
+            bool is_cpu = striequals(buft_name, ggml_backend_buft_name(ggml_backend_cpu_buffer_type()));
+            bool is_rknpu = striequals(buft_name, "RKNPU");
+            if (!is_cpu && !is_rknpu) {
+                continue;
+            }
+            for (auto t = ggml_get_first_tensor(it.second); t != NULL; t = ggml_get_next_tensor(it.second, t)) {
+                const size_t nbytes = ggml_nbytes(t);
+                if (is_cpu) {
+                    cpu_bytes += nbytes;
+                    cpu_tensors++;
+                } else {
+                    rknpu_bytes += nbytes;
+                    rknpu_tensors++;
+                }
+            }
+        }
+
+        LLAMA_LOG_INFO("%s: hybrid model tensor placement summary before allocation:\n", __func__);
+        LLAMA_LOG_INFO("%s:   CPU   tensors = %zu, bytes = %.2f MiB\n", __func__, cpu_tensors, cpu_bytes / 1024.0 / 1024.0);
+        LLAMA_LOG_INFO("%s:   RKNPU tensors = %zu, bytes = %.2f MiB\n", __func__, rknpu_tensors, rknpu_bytes / 1024.0 / 1024.0);
     }
 
     ml.done_getting_tensors();
@@ -2680,10 +2768,25 @@ static bool llm_load_tensors(
 #endif
         else {
             int ntensor = 0;
+            size_t alloc_bytes = 0;
+            size_t max_tensor_bytes = 0;
+            const char * max_tensor_name = nullptr;
             for (auto t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
                 ++ntensor;
+                const size_t tensor_alloc = GGML_PAD(ggml_backend_buft_get_alloc_size(buft, t), ggml_backend_buft_get_alignment(buft));
+                alloc_bytes += tensor_alloc;
+                if (tensor_alloc > max_tensor_bytes) {
+                    max_tensor_bytes = tensor_alloc;
+                    max_tensor_name = t->name;
+                }
             }
             if (ntensor > 0) {
+                if (striequals(ggml_backend_buft_name(buft), "RKNPU")) {
+                    LLAMA_LOG_INFO("%s: RKNPU buffer group -> tensors=%d, alloc=%zu bytes (%.2f MiB), largest=%s (%zu bytes / %.2f MiB)\n",
+                            __func__, ntensor, alloc_bytes, alloc_bytes / 1024.0 / 1024.0,
+                            max_tensor_name ? max_tensor_name : "<none>",
+                            max_tensor_bytes, max_tensor_bytes / 1024.0 / 1024.0);
+                }
                 ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
                 if (buf == nullptr) {
                     LLAMA_LOG_ERROR("Failed to allocate buffer type %s\n", ggml_backend_buft_name(buft));
@@ -5054,7 +5157,8 @@ bool llama_supports_mlock(void) {
 
 bool llama_supports_gpu_offload(void) {
 #if defined(GGML_USE_CUDA) || defined(GGML_USE_METAL)   || defined(GGML_USE_VULKAN) || \
-    defined(GGML_USE_SYCL) || defined(GGML_USE_KOMPUTE) || defined(GGML_USE_RPC)
+    defined(GGML_USE_SYCL) || defined(GGML_USE_KOMPUTE) || defined(GGML_USE_RPC) || \
+    defined(GGML_USE_RKNPU2)
     // Defined when llama.cpp is compiled with support for offloading model layers to GPU.
     return true;
 #else
@@ -5616,6 +5720,16 @@ struct llama_context * llama_init_from_model(
             ggml_backend_add_from_device(ctx, backend);
         }
     }
+#elif defined(GGML_USE_RKNPU2)
+        if (model->n_gpu_layers > 0) {
+            ggml_backend_t backend = ggml_backend_init_by_name("RKNPU", nullptr);
+            if (backend == nullptr) {
+                LLAMA_LOG_ERROR("%s: failed to initialize RKNPU backend\n", __func__);
+                llama_free(ctx);
+                return nullptr;
+            }
+            ggml_backend_add_from_device(ctx, backend);
+        }
 #endif
 
 #ifdef GGML_USE_BLAS

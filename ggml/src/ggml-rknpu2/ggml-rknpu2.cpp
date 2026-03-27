@@ -296,6 +296,12 @@ static const char * ggml_backend_rknpu_name(ggml_backend_t backend) {
     return "RKNPU";
 }
 
+static ggml_guid_t ggml_backend_rknpu_guid() {
+    static ggml_guid guid = {0x8c, 0x6d, 0x5f, 0x11, 0x73, 0x5a, 0x4c, 0x2e,
+                             0xb1, 0x42, 0x6a, 0x93, 0xd8, 0x04, 0x7e, 0x51};
+    return &guid;
+}
+
 static void ggml_backend_rknpu_free(ggml_backend_t backend) {
     ggml_backend_rknpu_context * ctx = (ggml_backend_rknpu_context *)backend->context;
     delete ctx;
@@ -869,6 +875,10 @@ static const char * ggml_backend_rknpu_buffer_type_get_name(ggml_backend_buffer_
 static ggml_backend_buffer_t ggml_backend_rknpu_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
     UNUSED(buft);
 
+    fprintf(stderr,
+            "RKNPU_BUFFER_ALLOC: one-shot backend buffer request size=%zu bytes (%.2f MiB), alignment=%zu\n",
+            size, size / 1024.0 / 1024.0, (size_t)64);
+
     rknpu2_allocation::DmaBuffer dma_buf = rknpu2_allocation::alloc(size);
     if (dma_buf.fd < 0) {
         return NULL;
@@ -1199,7 +1209,7 @@ static ggml_backend_t ggml_backend_rknpu_device_init_backend(ggml_backend_dev_t 
     };
 
     return new ggml_backend{
-        /* .guid    = */ {0},
+        /* .guid    = */ ggml_backend_rknpu_guid(),
         /* .iface   = */ rknpu_backend_interface,
         /* .context = */ ctx,
     };

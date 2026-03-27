@@ -162,6 +162,7 @@ struct llama_model_loader {
 
     const llama_hybrid_route * get_hybrid_route(const std::string & name) const;
     const llama_hybrid_route * get_hybrid_route(const char * name) const;
+    bool has_hybrid_npu_route() const;
     void dump_hybrid_plan() const;
 
     const llama_tensor_weight & require_weight(const char * name) const;
