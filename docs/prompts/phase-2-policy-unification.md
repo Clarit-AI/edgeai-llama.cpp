@@ -72,7 +72,9 @@ Implement Phase 2: unify the hybrid manifest policy engine and add deterministic
 
 ## Deliverables
 - code changes
-- test/fixture changes
+- test/fixture changes:
+  - deterministic tests → `tests/test-hybrid-*.cpp`
+  - manifest fixtures → `fixtures/manifest-*.json` (examples: dense-balanced, dense-cpu-only, moe-balanced, bad-pipeline, bad-quant-allow, bad-shape, bad-profile)
 - concise summary of architecture after unification
 - residual risks
 - suggested next benchmark steps on RK3588

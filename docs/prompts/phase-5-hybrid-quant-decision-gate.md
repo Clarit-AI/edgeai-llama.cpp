@@ -8,7 +8,7 @@ You are working in the repository at:
 - Phase 1 manifest routing is merged.
 - Phase 2 unified the policy engine.
 - Phase 3 produced RK3588 runtime validation data.
-- Phase 4 explored caching/prepack/artifact reuse.
+- Phase 4 evaluated caching/prepack/artifact strategies.
 - We are now at the decision gate for whether a true hybrid quant format is justified.
 
 ## Goal

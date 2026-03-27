@@ -20,24 +20,26 @@ Act as the roadmap orchestrator for the remaining hybrid-manifest / hybrid-quant
 Your first job is to determine the correct next phase automatically from repository state and available evidence, then execute that phase rather than stopping at planning.
 
 ## Phase Selection Rules
-Select the next phase using these rules:
+Select the next phase using these rules.
+
+**Note:** See `docs/prompts/phase-deliverables-verification.md` for concrete file path mappings of each deliverable criterion below.
 
 ### Choose Phase 2 if any of the following are true
 - `src/llama-model-loader.cpp` still contains a separate manifest parser/resolver implementation that duplicates `common/hybrid-manifest.*`
-- deterministic test coverage for hybrid plan output is missing or incomplete
-- manifest fixtures for valid/invalid routing are missing or incomplete
+- deterministic test coverage for hybrid plan output is missing or incomplete (check: `tests/test-hybrid-*.cpp`)
+- manifest fixtures for valid/invalid routing are missing or incomplete (check: `fixtures/manifest-*.json`)
 - strict-mode validation coverage is missing
 
 ### Choose Phase 3 if all of the following are true
 - phase 2 unification appears complete
 - deterministic validation exists
-- RK3588 runtime benchmark evidence is still missing, partial, stale, or not summarized
+- RK3588 runtime benchmark evidence is still missing, partial, stale, or not summarized (check: `benchmarks/rk3588-results.json`)
 
 ### Choose Phase 4 if all of the following are true
 - phase 2 is complete
 - phase 3 produced real RK3588 benchmark and fallback evidence
 - startup/prepack/cache cost is still an open operational issue
-- there is not yet a safe cache/artifact reuse path for hybrid routing
+- there is not yet a safe cache/artifact reuse path for hybrid routing (check: `cache/artifacts/`)
 
 ### Choose Phase 5 if all of the following are true
 - phase 2 is complete

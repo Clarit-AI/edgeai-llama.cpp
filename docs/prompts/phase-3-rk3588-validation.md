@@ -67,7 +67,7 @@ Execute Phase 3: RK3588 runtime validation and manifest tuning for dense and MoE
 
 ## Deliverables
 - code or manifest updates only where justified by measured results
-- benchmark summary suitable for a PR or design note
+- benchmark summary suitable for a PR or design note → `benchmarks/rk3588-results.json`
 - explicit recommendation for the next phase
 
 ## Execution Rule

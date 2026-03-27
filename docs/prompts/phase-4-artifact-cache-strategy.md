@@ -53,7 +53,7 @@ Turn the manifest-driven runtime planner into something operationally efficient 
 - no speculative artifact format that cannot be validated
 
 ## Deliverables
-- implementation
+- implementation → `cache/artifacts/`
 - test coverage
 - concise design note explaining cache/artifact boundaries
 - assessment of whether this materially reduces startup or repeated-run cost on RK3588
