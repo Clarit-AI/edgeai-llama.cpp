@@ -4907,11 +4907,6 @@ struct llama_model_params llama_model_default_params() {
         /*.progress_callback_user_data =*/ nullptr,
         /*.kv_overrides                =*/ nullptr,
         /*.tensor_buft_overrides       =*/ nullptr,
-        /*.hybrid_manifest             =*/ nullptr,
-        /*.hybrid_profile              =*/ nullptr,
-        /*.hybrid_dry_run              =*/ false,
-        /*.hybrid_dump_plan            =*/ false,
-        /*.hybrid_strict               =*/ false,
         /*.vocab_only                  =*/ false,
         /*.use_mmap                    =*/ true,
         /*.use_mlock                   =*/ false,
@@ -4924,6 +4919,11 @@ struct llama_model_params llama_model_default_params() {
         /*.mtp                         =*/ false,
         /*.dry_run                     =*/ false,
         /*.flash_attn                  =*/ true,
+        /*.hybrid_manifest             =*/ nullptr,
+        /*.hybrid_profile              =*/ nullptr,
+        /*.hybrid_dry_run              =*/ false,
+        /*.hybrid_dump_plan            =*/ false,
+        /*.hybrid_strict               =*/ false,
     };
 
 #ifdef GGML_USE_METAL

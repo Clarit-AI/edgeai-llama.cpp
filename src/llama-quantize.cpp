@@ -288,6 +288,35 @@ static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny) {
     return new_type;
 }
 
+static ggml_type apply_quantization_fallbacks(
+        ggml_type new_type,
+        const std::string & name,
+        const struct ggml_tensor * tensor,
+        quantize_state_internal & qs,
+        ggml_type custom_type) {
+    if (custom_type < GGML_TYPE_COUNT) {
+        new_type = custom_type;
+        LLAMA_LOG_INFO("Using custom type %s for tensor %s\n", ggml_type_name(new_type), name.c_str());
+    }
+
+    auto working_type = change_type_if_necessary(new_type, tensor->ne[0], tensor->ne[1]);
+    if (working_type != new_type) {
+        ++qs.n_fallback;
+        new_type = working_type;
+    }
+
+    if (name == "token_embd.weight") {
+        auto working_type = interleaved_properties(new_type).first;
+        if (working_type != new_type) {
+            printf("\n============ Token embeddings cannot be quantized with row-interleaved quants\n");
+            printf("---> Changed %s to %s\n", ggml_type_name(new_type), ggml_type_name(working_type));
+            new_type = working_type;
+        }
+    }
+
+    return new_type;
+}
+
 static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type new_type, const ggml_tensor * tensor, llama_ftype ftype) {
     const std::string name = ggml_get_name(tensor);
 
@@ -310,6 +339,12 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
                 break;
             }
         }
+    }
+
+    // Non-LLM architectures such as clip/mmproj can still be quantized generically,
+    // but the heuristics below assume transformer head/layer metadata and may abort.
+    if (arch == LLM_ARCH_UNKNOWN) {
+        return apply_quantization_fallbacks(new_type, name, tensor, qs, custom_type);
     }
 
     //auto get_layer = [] (const char * name) {
@@ -795,27 +830,7 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
         ++qs.i_ffn_up;
     }
 
-    if (custom_type < GGML_TYPE_COUNT) {
-        new_type = custom_type;
-        LLAMA_LOG_INFO("Using custom type %s for tensor %s\n", ggml_type_name(new_type), name.c_str());
-    }
-
-    auto working_type = change_type_if_necessary(new_type, tensor->ne[0], tensor->ne[1]);
-    if (working_type != new_type) {
-        ++qs.n_fallback;
-        new_type = working_type;
-    }
-
-    if (name == "token_embd.weight") {
-        auto working_type = interleaved_properties(new_type).first;
-        if (working_type != new_type) {
-            printf("\n============ Token embeddings cannot be quantized with row-interleaved quants\n");
-            printf("---> Changed %s to %s\n", ggml_type_name(new_type), ggml_type_name(working_type));
-            new_type = working_type;
-        }
-    }
-
-    return new_type;
+    return apply_quantization_fallbacks(new_type, name, tensor, qs, custom_type);
 }
 
 static size_t llama_tensor_quantize_internal(enum ggml_type new_type, const float * f32_data, void * new_data, const int64_t chunk_size, int64_t nrows, int64_t n_per_row, const float * imatrix, std::vector<std::thread> & workers, const int nthread) {
@@ -1656,4 +1671,3 @@ uint32_t llama_model_quantize(
         return 1;
     }
 }
-
