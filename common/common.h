@@ -17,6 +17,8 @@
 #include "log.h"
 #include <set>
 #include <cmath>
+#include <array>
+#include <regex>
 #include <string>
 #include <sstream>
 #include <string_view>
@@ -27,6 +29,7 @@
 #include <tuple>
 #include <map>
 #include <sstream>
+#include <nlohmann/json_fwd.hpp>
 
 #ifdef _WIN32
 #define DIRECTORY_SEPARATOR '\\'
@@ -139,7 +142,7 @@ thinking_tokens thinking_tokens_from_string(const std::string& format);
 enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_NONE,          // no speculative decoding
     COMMON_SPECULATIVE_TYPE_DRAFT,         // draft model
-    COMMON_SPECULATIVE_TYPE_MTP,           // MTP model 
+    COMMON_SPECULATIVE_TYPE_MTP,           // MTP model
     COMMON_SPECULATIVE_TYPE_EAGLE3,        // eagle draft model
     COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,  // simple self-speculative decoding
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,   // self-speculative decoding with n-gram keys only
@@ -226,6 +229,8 @@ struct gpt_params {
     int32_t main_gpu              =       0; // the GPU that is used for scratch and small tensors
     int32_t max_gpu               =       0; // max number of GPUs to use at a time for split mode "graph"
     int32_t ncmoe                 =       0; // number of layers in which MoE tensors are left in VRAM
+    int32_t fit_margin            =       0; // safety margin for auto-fit in MiB
+    bool    fit                   =   false; // automatically fit model (for now just using MoE tensor overrides)
     float   tensor_split[128]     =     {0}; // how split tensors should be distributed across GPUs
     int32_t grp_attn_n            =       1; // group-attention factor
     int32_t grp_attn_w            =     512; // group-attention width
@@ -258,6 +263,8 @@ struct gpt_params {
 
     std::string model                = ""; // model path
     std::string model_alias          = "unknown"; // model alias
+    std::string hybrid_manifest      = ""; // optional hybrid manifest sidecar path
+    std::string hybrid_profile       = ""; // optional hybrid manifest profile override
     std::string model_url            = ""; // model url to download
     std::string hf_token             = ""; // HF token
     std::string hf_repo              = ""; // HF repo
@@ -396,6 +403,7 @@ struct gpt_params {
     std::string public_path   = "";
     std::string chat_template = "";
     bool use_jinja = false;                                                                                 // NOLINT
+    bool use_peg = false;
     std::string system_prompt = "";
     bool enable_chat_template = true;
     common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
@@ -403,6 +411,9 @@ struct gpt_params {
     int reasoning_budget      = -1;
     bool prefill_assistant    = true;
     bool dry_run              = false;
+    bool hybrid_dry_run       = false; // resolve hybrid manifest and stop before tensor loading
+    bool hybrid_dump_plan     = false; // dump resolved hybrid tensor plan during model load
+    bool hybrid_strict        = false; // fail on unsupported hybrid manifest rules instead of falling back
 
     std::vector<std::string> api_keys;
 

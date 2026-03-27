@@ -378,6 +378,8 @@ extern "C" {
         int32_t  n_seq_max;
         int32_t  n_ubatch;
         int32_t  amb;
+        int32_t  fit_margin;
+        bool     fit;
 
         // proportion of the model (layers or rows) to offload to each GPU, size: llama_max_devices()
         const float * tensor_split;
@@ -411,6 +413,13 @@ extern "C" {
         bool mtp;           // if true, load MTP layers if present
         bool dry_run;       // skip loading tensors
         bool flash_attn;
+
+        // Hybrid routing fields - placed at end for ABI stability
+        const char * hybrid_manifest;
+        const char * hybrid_profile;
+        bool hybrid_dry_run;
+        bool hybrid_dump_plan;
+        bool hybrid_strict;
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations

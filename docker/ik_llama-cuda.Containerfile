@@ -6,6 +6,7 @@ ARG BASE_CUDA_RUN_CONTAINER=docker.io/nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu
 # Stage 1: Build
 FROM ${BASE_CUDA_DEV_CONTAINER} AS build
 ARG CUDA_DOCKER_ARCH=86 # CUDA architecture to build for
+ARG GGML_NATIVE=ON
 RUN apt-get update && apt-get install -yq build-essential git libcurl4-openssl-dev curl libgomp1 cmake
 
 RUN git clone https://github.com/ikawrakow/ik_llama.cpp.git /app
@@ -13,7 +14,7 @@ WORKDIR /app
 RUN if [ "${CUDA_DOCKER_ARCH}" != "default" ]; then \
     export CMAKE_ARGS="-DCMAKE_CUDA_ARCHITECTURES=${CUDA_DOCKER_ARCH}"; \
     fi && \
-    cmake -B build -DGGML_NATIVE=OFF -DGGML_CUDA=ON -DLLAMA_CURL=ON ${CMAKE_ARGS} -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined . && \
+    cmake -B build -DGGML_NATIVE=${GGML_NATIVE} -DGGML_CUDA=ON -DLLAMA_CURL=ON ${CMAKE_ARGS} -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined . && \
     cmake --build build --config Release -j$(nproc)
 RUN mkdir -p /app/lib && \
     find build -name "*.so" -exec cp {} /app/lib \;
@@ -67,8 +68,10 @@ ENTRYPOINT [ "/app/llama-server" ]
 # Stage 5: Swap
 FROM server AS swap
 ARG LS_REPO=mostlygeek/llama-swap
-ARG LS_VER=189
+ARG LS_VER=198
+ARG LS_SHA256=782a5577cd35b1b19b394f777265f4b396adcbef1c719f586cc1aabbda500def
 RUN curl -LO "https://github.com/${LS_REPO}/releases/download/v${LS_VER}/llama-swap_${LS_VER}_linux_amd64.tar.gz" \
+    && echo "${LS_SHA256}  llama-swap_${LS_VER}_linux_amd64.tar.gz" | sha256sum -c - \
     && tar -zxf "llama-swap_${LS_VER}_linux_amd64.tar.gz" \
     && rm "llama-swap_${LS_VER}_linux_amd64.tar.gz"
 COPY ./ik_llama-cuda-swap.config.yaml /app/config.yaml

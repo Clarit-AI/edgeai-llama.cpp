@@ -456,12 +456,12 @@ static size_t ggml_backend_registry_count = 0;
 // Forward declarations for device-aware registry (defined later)
 #define MAX_DEVICE_AWARE_REGS 16
 #define MAX_EXTERNAL_REGS 8
-static struct ggml_backend_simple_reg {
+struct ggml_backend_simple_reg {
     struct ggml_backend_reg base;
     char name[128];
     size_t flat_backend_idx;
 };
-static struct ggml_backend_simple_device {
+struct ggml_backend_simple_device {
     struct ggml_backend_device base;
     char name[64];
     char description[128];

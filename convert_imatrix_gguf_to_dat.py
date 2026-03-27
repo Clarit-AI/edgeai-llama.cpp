@@ -62,13 +62,45 @@ class IMatrixDatWriter:
                 np.array([len(name_bytes)], dtype=np.int32).tofile(f)
                 f.write(name_bytes)
 
-                ncall = int(entry.counts[0] / self.chunk_size)
+                values = np.asarray(entry.values, dtype=np.float32)
+                counts = np.asarray(entry.counts, dtype=np.float32)
+
+                # The legacy .dat format only supports one scalar ncall per tensor.
+                # For modern MoE imatrices, counts can vary per expert/row (e.g. 64x1),
+                # so emit pre-averaged weights and store ncall=0 to prevent the loader
+                # from applying an incorrect single scalar divide.
+                weights = values
+                if counts.size == 1:
+                    denom = counts.reshape(()).astype(np.float32)
+                    if float(denom) > 0:
+                        weights = values / denom
+                    else:
+                        weights = np.zeros_like(values)
+                        logger.warning("Non-positive count (%s) for %s, setting weights to zero", denom, name)
+                else:
+                    try:
+                        weights = np.divide(
+                            values,
+                            counts,
+                            out=np.zeros_like(values, dtype=np.float32),
+                            where=counts > 0,
+                        )
+                    except ValueError as exc:
+                        raise ValueError(
+                            f"Cannot broadcast counts with shape {counts.shape} "
+                            f"over values with shape {values.shape} for {name}"
+                        ) from exc
+
+                # Use chunk_count as ncall for legacy .dat round-trip semantics.
+                # For pre-averaged weights (counts.size > 1), ncall=0 signals
+                # the loader not to divide again.
+                ncall = self.chunk_count if counts.size == 1 else 0
+                flat_weights = np.asarray(weights, dtype=np.float32).reshape(-1)
                 np.array([ncall], dtype=np.int32).tofile(f)
-                np.array([len(entry.values)], dtype=np.int32).tofile(f)
+                np.array([flat_weights.size], dtype=np.int32).tofile(f)
+                flat_weights.tofile(f)
 
-                (entry.values / np.float32(self.chunk_size)).astype(np.float32).tofile(f)
-
-                logger.debug("  %s: ncall=%d, nval=%d", name, ncall, len(entry.values))
+                logger.debug("  %s: ncall=%d, nval=%d", name, ncall, flat_weights.size)
 
             np.array([self.chunk_count], dtype=np.int32).tofile(f)
 

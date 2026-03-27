@@ -5,6 +5,10 @@
 #include "ggml.h"
 //#include "ggml-backend.h"
 
+#ifdef GGML_USE_RKNPU2
+#  include "ggml-rknpu2/rknpu2-configuration.h"
+#endif
+
 #ifdef GGML_USE_CUDA
 #  include "ggml-cuda.h"
 #elif defined(GGML_USE_VULKAN)
@@ -23,6 +27,12 @@
 #include <future>
 #include <regex>
 #include <algorithm>
+#include <fstream>
+#include <sstream>
+#include <cstdlib>
+#include <cstring>
+
+#include <nlohmann/json.hpp>
 
 #if defined(_WIN32)
     #define WIN32_LEAN_AND_MEAN
@@ -37,6 +47,431 @@
 #endif
 
 #define LLAMA_API_INTERNAL
+
+ggml_backend_reg_t ggml_backend_reg_by_name(const char * name);
+
+namespace {
+
+using json = nlohmann::ordered_json;
+
+static std::string lower_copy(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char) std::tolower(c); });
+    return s;
+}
+
+static bool starts_with(const std::string & s, const char * prefix) {
+    return s.rfind(prefix, 0) == 0;
+}
+
+static std::vector<std::string> split_csv(const std::string & text) {
+    std::vector<std::string> out;
+    std::string token;
+    std::istringstream in(text);
+    while (std::getline(in, token, ',')) {
+        token.erase(std::remove_if(token.begin(), token.end(), [](unsigned char c) { return std::isspace(c); }), token.end());
+        if (!token.empty()) {
+            out.push_back(token);
+        }
+    }
+    return out;
+}
+
+static std::string get_env_string(const char * name) {
+    const char * value = std::getenv(name);
+    return value ? std::string(value) : std::string();
+}
+
+static bool get_env_bool(const char * name, bool fallback = false) {
+    const std::string value = lower_copy(get_env_string(name));
+    if (value.empty()) {
+        return fallback;
+    }
+    if (value == "0" || value == "false" || value == "off" || value == "no") {
+        return false;
+    }
+    return true;
+}
+
+static std::string get_env_string_fallback(std::initializer_list<const char *> names) {
+    for (const char * name : names) {
+        const std::string value = get_env_string(name);
+        if (!value.empty()) {
+            return value;
+        }
+    }
+    return {};
+}
+
+static bool get_env_bool_fallback(std::initializer_list<const char *> names, bool fallback = false) {
+    for (const char * name : names) {
+        const std::string value = get_env_string(name);
+        if (!value.empty()) {
+            return get_env_bool(name, fallback);
+        }
+    }
+    return fallback;
+}
+
+static int parse_layer_id(const std::string & name) {
+    static const std::regex re(R"(^blk\.([0-9]+)\.)");
+    std::smatch match;
+    if (std::regex_search(name, match, re) && match.size() > 1) {
+        return std::stoi(match[1].str());
+    }
+    return -1;
+}
+
+static std::string classify_role(const std::string & name) {
+    const std::string lower = lower_copy(name);
+
+    if (lower == "token_embd" || lower.find("tok_embeddings") != std::string::npos || lower.find("embed_tokens") != std::string::npos) {
+        return "embeddings";
+    }
+    if (lower == "output" || lower.find("output_norm") != std::string::npos || lower.find("lm_head") != std::string::npos) {
+        return "output";
+    }
+    if (lower.find("shexp") != std::string::npos) {
+        return "shared_expert";
+    }
+    if (lower.find("ffn_") != std::string::npos || lower.find("ffn.") != std::string::npos) {
+        if (lower.find("_exps") != std::string::npos || lower.find(".exps") != std::string::npos || lower.find("gate_inp") != std::string::npos) {
+            return "expert_ffn";
+        }
+        return "dense_ffn";
+    }
+    if (lower.find("attn") != std::string::npos || lower.find("rope") != std::string::npos) {
+        return "attention";
+    }
+    return "other";
+}
+
+static bool tensor_type_allowed(const ggml_tensor * tensor, const std::vector<std::string> & allow) {
+    if (allow.empty() || tensor == nullptr) {
+        return true;
+    }
+
+    const std::string type_name = lower_copy(ggml_type_name(tensor->type));
+    for (const std::string & entry : allow) {
+        if (lower_copy(entry) == type_name) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static std::pair<int, int> default_pipeline_alignment(const std::string & pipeline_name) {
+    const std::string upper = lower_copy(pipeline_name);
+    if (upper.find("int4") != std::string::npos) {
+        return {32, 64};
+    }
+    if (upper.find("int8") != std::string::npos) {
+        return {32, 32};
+    }
+    return {32, 16};
+}
+
+static bool parse_shape_requirement(const json & value, int & k_align, int & n_align, int & min_m, int & min_n) {
+    if (!value.is_object()) {
+        return false;
+    }
+    k_align = value.value("k_align", k_align);
+    n_align = value.value("n_align", n_align);
+    min_m = value.value("min_m", min_m);
+    min_n = value.value("min_n", min_n);
+    return true;
+}
+
+static bool tensor_matches_rule_shape(const ggml_tensor * tensor, int k_align, int n_align, int min_m, int min_n) {
+    if (tensor == nullptr) {
+        return false;
+    }
+    if (k_align > 0 && tensor->ne[0] % k_align != 0) {
+        return false;
+    }
+    if (n_align > 0 && tensor->ne[1] % n_align != 0) {
+        return false;
+    }
+    if (min_m > 0 && (int64_t) tensor->ne[0] < min_m) {
+        return false;
+    }
+    if (min_n > 0 && (int64_t) tensor->ne[1] < min_n) {
+        return false;
+    }
+    return true;
+}
+
+static ggml_backend_buffer_type_t get_rknpu_buffer_type() {
+#ifdef GGML_USE_RKNPU2
+    static ggml_backend_buffer_type_t buft = nullptr;
+    static bool initialized = false;
+    if (!initialized) {
+        initialized = true;
+        if (ggml_backend_reg_t reg = ggml_backend_reg_by_name("RKNPU")) {
+            if (ggml_backend_dev_t dev = reg->iface.get_device(reg, 0)) {
+                buft = dev->iface.get_buffer_type(dev);
+            }
+        }
+    }
+    return buft;
+#else
+    return nullptr;
+#endif
+}
+
+struct hybrid_manifest_rule {
+    std::string name;
+    std::string match;
+    std::regex  match_re;
+    bool        has_layers = false;
+    int         layer_start = -1;
+    int         layer_end = -1;
+    std::string backend;
+    std::string npu_pipeline;
+    std::vector<std::string> source_quant_allow;
+    int         k_align = 0;
+    int         n_align = 0;
+    int         min_m = 0;
+    int         min_n = 0;
+    std::string fallback = "cpu";
+    std::string role;
+    bool        required = false;
+};
+
+struct hybrid_manifest_profile {
+    std::string name;
+    std::vector<hybrid_manifest_rule> rules;
+};
+
+struct hybrid_manifest {
+    int version = 1;
+    std::string model_hint_arch;
+    std::string model_hint_name_regex;
+    int model_hint_n_layer = -1;
+    std::string default_cpu_policy = "cpu_preferred";
+    std::string active_profile;
+    std::map<std::string, hybrid_manifest_profile> profiles;
+    std::vector<hybrid_manifest_rule> rules;
+};
+
+static std::vector<std::string> json_string_array(const json & value) {
+    std::vector<std::string> result;
+    if (!value.is_array()) {
+        return result;
+    }
+    for (const auto & item : value) {
+        if (item.is_string()) {
+            result.push_back(item.get<std::string>());
+        }
+    }
+    return result;
+}
+
+static bool parse_layers(const json & value, hybrid_manifest_rule & rule, std::string & err) {
+    if (!value.is_array() || value.size() != 2 || !value[0].is_number_integer() || !value[1].is_number_integer()) {
+        err = "rule.layers must be a two-element integer array";
+        return false;
+    }
+    rule.has_layers = true;
+    rule.layer_start = value[0].get<int>();
+    rule.layer_end = value[1].get<int>();
+    return true;
+}
+
+static bool parse_rule(const json & value, hybrid_manifest_rule & rule, std::string & err, bool strict) {
+    if (!value.is_object()) {
+        err = "rule entry must be a JSON object";
+        return false;
+    }
+
+    try {
+        rule.name = value.value("name", std::string());
+        rule.match = value.value("match", std::string());
+        rule.backend = lower_copy(value.value("backend", std::string("cpu")));
+        rule.npu_pipeline = value.value("npu_pipeline", std::string());
+        rule.source_quant_allow = json_string_array(value.value("source_quant_allow", json::array()));
+        rule.fallback = lower_copy(value.value("fallback", std::string("cpu")));
+        rule.role = value.value("role", std::string());
+        rule.required = value.value("required", false);
+
+        if (value.contains("layers")) {
+            if (!parse_layers(value["layers"], rule, err)) {
+                return false;
+            }
+        }
+        if (value.contains("min_shape")) {
+            const json & shape = value["min_shape"];
+            if (!shape.is_object()) {
+                err = "rule.min_shape must be an object";
+                return false;
+            }
+            rule.k_align = shape.value("k_align", 0);
+            rule.n_align = shape.value("n_align", 0);
+            rule.min_m   = shape.value("min_m", 0);
+            rule.min_n   = shape.value("min_n", 0);
+        }
+
+        const std::string match = rule.match.empty() ? ".*" : rule.match;
+        try {
+            rule.match_re = std::regex(match);
+        } catch (const std::exception & e) {
+            err = format("invalid rule regex '%s': %s", match.c_str(), e.what());
+            return false;
+        }
+    } catch (const std::exception & e) {
+        err = format("JSON parsing error in rule: %s", e.what());
+        if (strict) {
+            return false;
+        }
+        LLAMA_LOG_WARN("%s: %s, using defaults\n", __func__, err.c_str());
+        // Continue with defaults already set
+    }
+
+    return true;
+}
+
+static bool parse_rules_array(const json & value, std::vector<hybrid_manifest_rule> & rules, std::string & err, bool strict) {
+    if (!value.is_array()) {
+        err = "rules must be an array";
+        return false;
+    }
+    rules.clear();
+    for (const auto & entry : value) {
+        hybrid_manifest_rule rule;
+        if (!parse_rule(entry, rule, err, strict)) {
+            return false;
+        }
+        rules.push_back(std::move(rule));
+    }
+    return true;
+}
+
+static bool parse_hybrid_manifest(const std::string & path, const std::string & profile_name, hybrid_manifest & manifest, std::string & err, bool strict) {
+    std::ifstream f(path);
+    if (!f.is_open()) {
+        err = format("failed to open hybrid manifest '%s'", path.c_str());
+        return false;
+    }
+
+    json doc;
+    try {
+        f >> doc;
+    } catch (const std::exception & e) {
+        err = format("failed to parse hybrid manifest '%s': %s", path.c_str(), e.what());
+        return false;
+    }
+
+    try {
+        manifest.version = doc.value("version", 1);
+        if (doc.contains("default_cpu_policy")) {
+            manifest.default_cpu_policy = lower_copy(doc["default_cpu_policy"].get<std::string>());
+        }
+
+        if (doc.contains("model_hint") && doc["model_hint"].is_object()) {
+            const json & hint = doc["model_hint"];
+            manifest.model_hint_arch = lower_copy(hint.value("arch", std::string()));
+            manifest.model_hint_name_regex = hint.value("name_regex", std::string());
+            manifest.model_hint_n_layer = hint.value("n_layer", -1);
+        }
+
+        if (doc.contains("rules")) {
+            if (!parse_rules_array(doc["rules"], manifest.rules, err, strict)) {
+                return false;
+            }
+        }
+
+        if (doc.contains("profiles")) {
+            if (!doc["profiles"].is_object()) {
+                err = "profiles must be an object";
+                return false;
+            }
+            for (auto it = doc["profiles"].begin(); it != doc["profiles"].end(); ++it) {
+                hybrid_manifest_profile profile;
+                profile.name = it.key();
+                if (!it.value().is_object()) {
+                    err = format("profile '%s' must be an object", profile.name.c_str());
+                    return false;
+                }
+                if (it.value().contains("rules")) {
+                    if (!parse_rules_array(it.value()["rules"], profile.rules, err, strict)) {
+                        return false;
+                    }
+                }
+                manifest.profiles.emplace(profile.name, std::move(profile));
+            }
+        }
+
+        if (doc.contains("active_profile")) {
+            manifest.active_profile = doc["active_profile"].get<std::string>();
+        }
+    } catch (const std::exception & e) {
+        err = format("JSON parsing error in manifest: %s", e.what());
+        if (strict) {
+            return false;
+        }
+        LLAMA_LOG_WARN("%s: %s, using defaults\n", __func__, err.c_str());
+        // Continue with defaults already set
+    }
+
+    const std::string selected_profile = !profile_name.empty() ? profile_name : manifest.active_profile;
+    if (!selected_profile.empty()) {
+        auto it = manifest.profiles.find(selected_profile);
+        if (it == manifest.profiles.end()) {
+            err = format("hybrid profile '%s' not found in manifest", selected_profile.c_str());
+            return false;
+        }
+        manifest.rules = it->second.rules;
+    }
+
+    if (manifest.rules.empty() && doc.contains("rules")) {
+        // already parsed top-level rules
+    } else if (manifest.rules.empty() && !manifest.profiles.empty() && selected_profile.empty()) {
+        if (manifest.profiles.size() == 1) {
+            LLAMA_LOG_WARN("%s: no profile selected, using single profile '%s'\n", __func__, manifest.profiles.begin()->first.c_str());
+            manifest.rules = manifest.profiles.begin()->second.rules;
+        } else {
+            err = format("hybrid manifest has %zu profiles but no profile was selected and no 'default' profile exists", manifest.profiles.size());
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool default_policy_uses_npu(const std::string & policy) {
+    return lower_copy(policy) == "npu_preferred" || lower_copy(policy) == "npu";
+}
+
+static bool default_policy_cpu_only(const std::string & policy) {
+    const std::string lower = lower_copy(policy);
+    return lower == "cpu_only" || lower == "cpu";
+}
+
+static std::string infer_npu_pipeline_for_type(ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_F16:  return "FP16_STANDARD";
+        case GGML_TYPE_Q8_0:  return "INT8_STANDARD";
+        case GGML_TYPE_Q6_K:  return "INT8_STANDARD";
+        case GGML_TYPE_Q4_0:  return "INT4_HADAMARD";
+        default:              return std::string();
+    }
+}
+
+static bool tensor_is_supported_npu_candidate(const ggml_tensor * tensor) {
+    if (!tensor) {
+        return false;
+    }
+    switch (tensor->type) {
+        case GGML_TYPE_F16:
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_Q4_0:
+            return true;
+        default:
+            return false;
+    }
+}
+
+} // namespace
 
 namespace GGUFMeta {
     template <typename T, gguf_type gt_, T (*gfun)(const gguf_context *, const int)>
@@ -207,7 +642,12 @@ namespace GGUFMeta {
 llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, bool use_mmap, bool check_tensors,
         bool repack_tensors, bool use_thp, bool merge_qkv, bool merge_up_gate_exps,
         const llama_model_kv_override * param_overrides_p,
-        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p) {
+        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p,
+        const char * hybrid_manifest_path_p,
+        const char * hybrid_profile_p,
+        bool hybrid_dry_run_p,
+        bool hybrid_dump_plan_p,
+        bool hybrid_strict_p) {
     int trace = 0;
     if (getenv("LLAMA_TRACE")) {
         trace = atoi(getenv("LLAMA_TRACE"));
@@ -238,6 +678,19 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
     }
 
     tensor_buft_overrides = param_tensor_buft_overrides_p;
+    hybrid_manifest_path = hybrid_manifest_path_p ? hybrid_manifest_path_p : get_env_string_fallback({"LLAMA_HYBRID_MANIFEST", "HYBRID_MANIFEST"});
+    hybrid_profile = hybrid_profile_p ? hybrid_profile_p : get_env_string_fallback({"LLAMA_HYBRID_PROFILE", "HYBRID_PROFILE"});
+    // For booleans, only use env if param was not explicitly provided (default false)
+    hybrid_dry_run = hybrid_dry_run_p ? hybrid_dry_run_p : get_env_bool_fallback({"LLAMA_HYBRID_DRY_RUN", "HYBRID_DRY_RUN"});
+    hybrid_dump_plan = hybrid_dump_plan_p ? hybrid_dump_plan_p : get_env_bool_fallback({"LLAMA_HYBRID_DUMP_PLAN", "HYBRID_DUMP_PLAN"});
+    hybrid_strict = hybrid_strict_p ? hybrid_strict_p : get_env_bool_fallback({"LLAMA_HYBRID_STRICT", "HYBRID_STRICT"});
+    if (hybrid_manifest_path.empty()) {
+        const std::string default_manifest_path = fname + ".hybrid.json";
+        std::ifstream hybrid_manifest_file(default_manifest_path);
+        if (hybrid_manifest_file.good()) {
+            hybrid_manifest_path = default_manifest_path;
+        }
+    }
 
     struct ggml_context * ctx = NULL;
     struct gguf_init_params params = {
@@ -500,6 +953,289 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
     this->use_thp = use_thp;
     this->merge_qkv = merge_qkv;
     this->merge_up_gate_exps = merge_up_gate_exps;
+
+    build_hybrid_plan();
+}
+
+const llama_hybrid_route * llama_model_loader::get_hybrid_route(const std::string & name) const {
+    auto it = hybrid_routes.find(name);
+    if (it == hybrid_routes.end()) {
+        return nullptr;
+    }
+    return &it->second;
+}
+
+const llama_hybrid_route * llama_model_loader::get_hybrid_route(const char * name) const {
+    return name ? get_hybrid_route(std::string(name)) : nullptr;
+}
+
+void llama_model_loader::dump_hybrid_plan() const {
+    dump_hybrid_plan_impl(true);
+}
+
+void llama_model_loader::dump_hybrid_plan_impl(bool verbose) const {
+    if (hybrid_plan.empty()) {
+        LLAMA_LOG_INFO("%s: hybrid plan is empty\n", __func__);
+        return;
+    }
+
+    size_t n_manifest = 0;
+    size_t n_override = 0;
+    size_t n_legacy = 0;
+    for (const auto & route : hybrid_plan) {
+        switch (route.source) {
+            case LLAMA_HYBRID_ROUTE_SOURCE_MANIFEST: ++n_manifest; break;
+            case LLAMA_HYBRID_ROUTE_SOURCE_OVERRIDE:  ++n_override; break;
+            case LLAMA_HYBRID_ROUTE_SOURCE_LEGACY:    ++n_legacy; break;
+        }
+    }
+
+    LLAMA_LOG_INFO("%s: hybrid plan summary: %zu tensors (manifest=%zu, override=%zu, legacy=%zu)\n",
+            __func__, hybrid_plan.size(), n_manifest, n_override, n_legacy);
+
+    if (!verbose) {
+        return;
+    }
+
+    for (const auto & route : hybrid_plan) {
+        const char * source = route.source == LLAMA_HYBRID_ROUTE_SOURCE_MANIFEST ? "manifest" :
+                              route.source == LLAMA_HYBRID_ROUTE_SOURCE_OVERRIDE  ? "override"  : "legacy";
+        const char * buft_name = route.buft ? ggml_backend_buft_name(route.buft) : "none";
+        LLAMA_LOG_INFO("%s: - tensor %-48s layer=%3d role=%-14s source=%-8s backend=%-12s buft=%-20s pipeline=%-20s reason=%s\n",
+                __func__,
+                route.tensor_name.c_str(),
+                route.layer_id,
+                route.role.c_str(),
+                source,
+                route.backend_name.c_str(),
+                buft_name,
+                route.npu_pipeline.c_str(),
+                route.reason.c_str());
+    }
+}
+
+void llama_model_loader::build_hybrid_plan() {
+    hybrid_plan.clear();
+    hybrid_routes.clear();
+
+#ifdef GGML_USE_RKNPU2
+    rknpu2_configuration::Rknpu2ConfigManager::get_instance().clear_explicit_routes();
+#endif
+
+    hybrid_manifest manifest;
+    bool manifest_enabled = !hybrid_manifest_path.empty();
+    if (manifest_enabled) {
+        std::string err;
+        if (!parse_hybrid_manifest(hybrid_manifest_path, hybrid_profile, manifest, err, hybrid_strict)) {
+            if (hybrid_strict) {
+                throw std::runtime_error(err);
+            }
+            LLAMA_LOG_WARN("%s: %s; falling back to legacy routing\n", __func__, err.c_str());
+            manifest_enabled = false;
+        }
+    }
+
+    if (manifest_enabled) {
+        if (!manifest.model_hint_arch.empty() && lower_copy(manifest.model_hint_arch) != lower_copy(arch_name)) {
+            const std::string msg = format("hybrid manifest expects arch '%s' but model arch is '%s'",
+                    manifest.model_hint_arch.c_str(), arch_name.c_str());
+            if (hybrid_strict) {
+                throw std::runtime_error(msg);
+            }
+            LLAMA_LOG_WARN("%s: %s; continuing\n", __func__, msg.c_str());
+        }
+        if (manifest.model_hint_n_layer > 0) {
+            LLAMA_LOG_INFO("%s: hybrid manifest declares n_layer hint %d\n", __func__, manifest.model_hint_n_layer);
+        }
+    }
+
+    const ggml_backend_buffer_type_t npu_buft = get_rknpu_buffer_type();
+
+    auto add_route = [&](llama_hybrid_route route) {
+        hybrid_routes.emplace(route.tensor_name, route);
+        hybrid_plan.push_back(std::move(route));
+    };
+
+    auto route_from_override = [&](const llama_tensor_weight & weight, llama_hybrid_route & route) -> bool {
+        if (!tensor_buft_overrides) {
+            return false;
+        }
+        for (const auto * o = tensor_buft_overrides; o->pattern != nullptr; ++o) {
+            const std::regex pattern(o->pattern);
+            if (std::regex_search(std::string(weight.tensor->name), pattern)) {
+                route.buft = o->buft;
+                route.backend_name = route.buft ? ggml_backend_buft_name(route.buft) : "none";
+                route.source = LLAMA_HYBRID_ROUTE_SOURCE_OVERRIDE;
+                route.reason = format("matched tensor override regex '%s'", o->pattern);
+                return true;
+            }
+        }
+        return false;
+    };
+
+    auto route_from_manifest = [&](const llama_tensor_weight & weight, llama_hybrid_route & route) -> bool {
+        if (!manifest_enabled) {
+            return false;
+        }
+
+        const std::string tensor_name(weight.tensor->name);
+        const int layer_id = route.layer_id;
+        const std::string role = route.role;
+        const std::string type_name = lower_copy(ggml_type_name(weight.tensor->type));
+
+        // Applies the CPU fallback declared on a manifest rule that could not be
+        // satisfied by the NPU.  Returns true when the fallback was applied (the
+        // caller should then return true from route_from_manifest so that override
+        // and legacy logic is skipped, preserving manifest->override->legacy order).
+        auto apply_npu_fallback = [&](const hybrid_manifest_rule & rule,
+                                      const std::string & rejection_reason) -> bool {
+            if (rule.fallback == "cpu") {
+                route.buft        = ggml_backend_cpu_buffer_type();
+                route.backend_name = "cpu";
+                route.source      = LLAMA_HYBRID_ROUTE_SOURCE_MANIFEST;
+                route.reason      = format("%s; manifest fallback to cpu", rejection_reason.c_str());
+                return true;
+            }
+            route.reason = rejection_reason;
+            return false;
+        };
+
+        for (const auto & rule : manifest.rules) {
+            if (!std::regex_search(tensor_name, rule.match_re)) {
+                continue;
+            }
+            if (rule.has_layers && (layer_id < rule.layer_start || layer_id > rule.layer_end)) {
+                continue;
+            }
+            if (!rule.role.empty() && lower_copy(rule.role) != lower_copy(role)) {
+                continue;
+            }
+            if (!tensor_type_allowed(weight.tensor, rule.source_quant_allow)) {
+                if (hybrid_strict || rule.required) {
+                    throw std::runtime_error(format("hybrid rule '%s' rejects tensor '%s' type %s",
+                            rule.name.c_str(), tensor_name.c_str(), type_name.c_str()));
+                }
+                const std::string rej = format("rule '%s' rejected tensor type %s", rule.name.c_str(), type_name.c_str());
+                // The other NPU rejection paths are inside `if (backend == "npu")` below,
+                // so the check is implicit there.  Here we haven't read `backend` yet.
+                if (lower_copy(rule.backend) == "npu" && apply_npu_fallback(rule, rej)) {
+                    return true;
+                }
+                route.reason = rej;
+                continue;
+            }
+
+            const std::string backend = lower_copy(rule.backend);
+            if (backend == "cpu") {
+                route.buft = ggml_backend_cpu_buffer_type();
+                route.backend_name = "cpu";
+                route.source = LLAMA_HYBRID_ROUTE_SOURCE_MANIFEST;
+                route.reason = format("manifest rule '%s' routed tensor to CPU", rule.name.c_str());
+                return true;
+            }
+
+            if (backend == "npu") {
+                const std::string pipeline = !rule.npu_pipeline.empty() ? rule.npu_pipeline : infer_npu_pipeline_for_type(weight.tensor->type);
+                if (pipeline.empty()) {
+                    if (hybrid_strict || rule.required) {
+                        throw std::runtime_error(format("hybrid rule '%s' requires an NPU pipeline for tensor '%s'",
+                                rule.name.c_str(), tensor_name.c_str()));
+                    }
+                    if (apply_npu_fallback(rule, format("rule '%s' has no usable NPU pipeline", rule.name.c_str()))) {
+                        return true;
+                    }
+                    continue;
+                }
+
+                const std::pair<int, int> defaults = default_pipeline_alignment(pipeline);
+                const int k_align = rule.k_align > 0 ? rule.k_align : defaults.first;
+                const int n_align = rule.n_align > 0 ? rule.n_align : defaults.second;
+                if (!tensor_matches_rule_shape(weight.tensor, k_align, n_align, rule.min_m, rule.min_n)) {
+                    if (hybrid_strict || rule.required) {
+                        throw std::runtime_error(format("hybrid rule '%s' has incompatible shape for tensor '%s'",
+                                rule.name.c_str(), tensor_name.c_str()));
+                    }
+                    if (apply_npu_fallback(rule, format("rule '%s' rejected tensor '%s' due to alignment/shape", rule.name.c_str(), tensor_name.c_str()))) {
+                        return true;
+                    }
+                    continue;
+                }
+
+                if (!npu_buft) {
+                    if (hybrid_strict || rule.required) {
+                        throw std::runtime_error("RKNPU backend buffer type is unavailable");
+                    }
+                    if (apply_npu_fallback(rule, format("rule '%s' requested NPU but RKNPU backend is unavailable", rule.name.c_str()))) {
+                        return true;
+                    }
+                    continue;
+                }
+
+                route.buft = npu_buft;
+                route.backend_name = "npu";
+                route.npu_pipeline = pipeline;
+                route.source = LLAMA_HYBRID_ROUTE_SOURCE_MANIFEST;
+                route.reason = format("manifest rule '%s' routed tensor to NPU pipeline '%s'", rule.name.c_str(), pipeline.c_str());
+                return true;
+            }
+
+            if (hybrid_strict || rule.required) {
+                throw std::runtime_error(format("hybrid rule '%s' has unknown backend '%s'", rule.name.c_str(), rule.backend.c_str()));
+            }
+            route.reason = format("rule '%s' had unknown backend '%s'", rule.name.c_str(), rule.backend.c_str());
+        }
+
+        if (default_policy_uses_npu(manifest.default_cpu_policy) && tensor_is_supported_npu_candidate(weight.tensor) && npu_buft) {
+            const std::string pipeline = infer_npu_pipeline_for_type(weight.tensor->type);
+            const std::pair<int, int> defaults = default_pipeline_alignment(pipeline);
+            if (tensor_matches_rule_shape(weight.tensor, defaults.first, defaults.second, 0, 0)) {
+                route.buft = npu_buft;
+                route.backend_name = "npu";
+                route.npu_pipeline = pipeline;
+                route.source = LLAMA_HYBRID_ROUTE_SOURCE_MANIFEST;
+                route.reason = "manifest default_cpu_policy=npu_preferred";
+                return true;
+            }
+        }
+
+        if (default_policy_cpu_only(manifest.default_cpu_policy) || manifest.default_cpu_policy == "cpu_preferred") {
+            route.reason = "manifest default_cpu_policy kept tensor on CPU";
+        }
+        return false;
+    };
+
+    for (const auto & weight : weights) {
+        llama_hybrid_route route;
+        route.tensor_name = weight.tensor->name;
+        route.layer_id = parse_layer_id(route.tensor_name);
+        route.role = classify_role(route.tensor_name);
+        route.backend_name = "legacy";
+        route.reason = "legacy placement";
+
+        bool resolved = route_from_manifest(weight, route);
+        if (!resolved) {
+            resolved = route_from_override(weight, route);
+        }
+
+        if (!resolved) {
+            route.source = LLAMA_HYBRID_ROUTE_SOURCE_LEGACY;
+        }
+
+        add_route(std::move(route));
+    }
+
+#ifdef GGML_USE_RKNPU2
+    for (const auto & route : hybrid_plan) {
+        if (!route.npu_pipeline.empty()) {
+            rknpu2_configuration::Rknpu2ConfigManager::get_instance().register_explicit_route(
+                    route.tensor_name, route.npu_pipeline, hybrid_strict);
+        }
+    }
+#endif
+
+    if (manifest_enabled || hybrid_dump_plan || hybrid_dry_run) {
+        dump_hybrid_plan_impl(true);
+    }
 }
 
 llama_model_loader::~llama_model_loader() {
@@ -1099,4 +1835,3 @@ template bool llama_model_loader::get_key_or_arr<std::array<uint32_t, 512>>(enum
 template bool llama_model_loader::get_key_or_arr<std::array<float, 512>>(enum llm_kv kid, std::array<float, 512> & result, uint32_t n, bool required);
 
 template std::enable_if<std::is_integral<unsigned int>::value, bool>::type llama_model_loader::get_arr_n<unsigned int>(enum llm_kv, unsigned int&, bool);
-

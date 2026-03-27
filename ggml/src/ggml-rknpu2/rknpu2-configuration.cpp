@@ -1,10 +1,20 @@
 #include "ggml-impl.h"
 
 #include "rknpu2-configuration.h"
+#include "../../../common/log.h"
 
 #include <arm_neon.h>
+#include "../../../vendor/nlohmann/json.hpp"
+
+#include <algorithm>
+#include <cctype>
+#include <chrono>
 #include <cstdlib>
+#include <fstream>
+#include <stdexcept>
 #include <sstream>
+
+using json = nlohmann::ordered_json;
 
 // --- Anonymous namespace for chip-specific packing functions ---
 
@@ -125,6 +135,236 @@ namespace {
         }
         return tokens;
     }
+
+    static std::string to_upper(std::string value) {
+        std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return (char) std::toupper(c); });
+        return value;
+    }
+
+    static bool env_flag_enabled(const char * name) {
+        const char * value = std::getenv(name);
+        if (value == nullptr || value[0] == '\0') {
+            return false;
+        }
+        const std::string s = to_upper(value);
+        return s == "1" || s == "TRUE" || s == "YES" || s == "ON";
+    }
+
+    static std::string env_or_empty(const char * name) {
+        const char * value = std::getenv(name);
+        return value == nullptr ? std::string() : std::string(value);
+    }
+
+    static int parse_layer_id(const std::string & tensor_name) {
+        static const std::regex layer_re(R"(^blk\.(\d+)\.)");
+        std::smatch m;
+        if (std::regex_search(tensor_name, m, layer_re)) {
+            return std::stoi(m[1].str());
+        }
+        return -1;
+    }
+
+    static std::string derive_role(const std::string & tensor_name) {
+        const std::string lower = to_upper(tensor_name);
+        if (lower.find("FFN") != std::string::npos && lower.find("EXPS") != std::string::npos) {
+            return lower.find("SHARED") != std::string::npos ? "shared_expert" : "ffn_expert";
+        }
+        if (lower.find("FFN") != std::string::npos) {
+            return "ffn_dense";
+        }
+        if (lower.find("ATTN") != std::string::npos) {
+            return "attention";
+        }
+        if (lower.find("TOKEN_EMBD") != std::string::npos || lower.find("TOK_EMBD") != std::string::npos || lower.find("EMBED") != std::string::npos) {
+            return "embeddings";
+        }
+        if (lower.find("OUTPUT") != std::string::npos || lower.find("LM_HEAD") != std::string::npos) {
+            return "output";
+        }
+        return "other";
+    }
+
+    static bool parse_layer_range(const json & value, int & begin, int & end) {
+        if (value.is_array() && value.size() >= 2 && value[0].is_number_integer() && value[1].is_number_integer()) {
+            begin = value[0].get<int>();
+            end = value[1].get<int>();
+            return true;
+        }
+        if (value.is_object()) {
+            if (value.contains("begin") && value.contains("end") && value["begin"].is_number_integer() && value["end"].is_number_integer()) {
+                begin = value["begin"].get<int>();
+                end = value["end"].get<int>();
+                return true;
+            }
+            if (value.contains("start") && value.contains("end") && value["start"].is_number_integer() && value["end"].is_number_integer()) {
+                begin = value["start"].get<int>();
+                end = value["end"].get<int>();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static bool parse_manifest_rule(const json & rule_json, Rknpu2HybridRule & rule, std::string & error) {
+        if (!rule_json.is_object()) {
+            error = "manifest rule is not an object";
+            return false;
+        }
+
+        rule.name = rule_json.value("name", std::string());
+        const std::string match = rule_json.value("match", rule_json.value("pattern", std::string()));
+        if (match.empty()) {
+            error = "manifest rule is missing match/pattern";
+            return false;
+        }
+
+        try {
+            rule.match = std::regex(match);
+        } catch (const std::regex_error & e) {
+            error = std::string("invalid manifest regex '") + match + "': " + e.what();
+            return false;
+        }
+
+        const std::string backend = to_upper(rule_json.value("backend", std::string("NPU")));
+        rule.force_cpu = backend == "CPU" || backend == "CPU_ONLY";
+        rule.required = rule_json.value("required", false);
+        rule.role = rule_json.value("role", std::string());
+        rule.pipeline_name = rule_json.value("npu_pipeline", rule_json.value("pipeline", std::string()));
+
+        if (rule_json.contains("layers")) {
+            rule.has_layer_range = parse_layer_range(rule_json["layers"], rule.layer_begin, rule.layer_end);
+            if (!rule.has_layer_range) {
+                error = "manifest rule has invalid layers range";
+                return false;
+            }
+        }
+
+        if (rule_json.contains("source_quant_allow")) {
+            const auto & arr = rule_json["source_quant_allow"];
+            if (!arr.is_array()) {
+                error = "source_quant_allow must be an array";
+                return false;
+            }
+            for (const auto & item : arr) {
+                if (!item.is_string()) {
+                    error = "source_quant_allow entries must be strings";
+                    return false;
+                }
+                rule.source_quant_allow.push_back(to_upper(item.get<std::string>()));
+            }
+        }
+
+        return true;
+    }
+
+    static bool load_manifest_rules(
+        const std::string & path,
+        std::string & profile_name,
+        std::string & default_policy,
+        std::vector<Rknpu2HybridRule> & rules,
+        std::string & error) {
+
+        std::ifstream f(path);
+        if (!f) {
+            error = "failed to open hybrid manifest: " + path;
+            return false;
+        }
+
+        json manifest;
+        try {
+            f >> manifest;
+        } catch (const std::exception & e) {
+            error = std::string("failed to parse hybrid manifest: ") + e.what();
+            return false;
+        }
+
+        if (manifest.contains("default_cpu_policy") && manifest["default_cpu_policy"].is_string()) {
+            default_policy = to_upper(manifest["default_cpu_policy"].get<std::string>());
+        }
+
+        json profile_obj = manifest;
+        std::string effective_profile = profile_name;
+        if (effective_profile.empty() && manifest.contains("active_profile") && manifest["active_profile"].is_string()) {
+            effective_profile = manifest["active_profile"].get<std::string>();
+        }
+
+        if (manifest.contains("profiles") && manifest["profiles"].is_object()) {
+            const auto & profiles = manifest["profiles"];
+            if (!effective_profile.empty() && profiles.contains(effective_profile)) {
+                profile_obj = profiles[effective_profile];
+            } else if (!effective_profile.empty()) {
+                // explicitly requested profile not found
+                error = "hybrid manifest profile '" + effective_profile + "' not found";
+                return false;
+            } else if (profiles.contains("default")) {
+                profile_obj = profiles["default"];
+            } else if (!profiles.empty()) {
+                profile_obj = profiles.begin().value();
+                effective_profile = profiles.begin().key();
+            } else {
+                error = "hybrid manifest profiles object is empty";
+                return false;
+            }
+        }
+
+        if (profile_obj.contains("default_cpu_policy") && profile_obj["default_cpu_policy"].is_string()) {
+            default_policy = to_upper(profile_obj["default_cpu_policy"].get<std::string>());
+        }
+
+        const json * rules_src = nullptr;
+        if (profile_obj.contains("rules")) {
+            rules_src = &profile_obj["rules"];
+        } else if (manifest.contains("rules")) {
+            rules_src = &manifest["rules"];
+        }
+        if (rules_src == nullptr || !rules_src->is_array()) {
+            error = "hybrid manifest does not contain a rules array";
+            return false;
+        }
+
+        rules.clear();
+        rules.reserve(rules_src->size());
+        for (const auto & item : *rules_src) {
+            Rknpu2HybridRule rule;
+            if (!parse_manifest_rule(item, rule, error)) {
+                return false;
+            }
+            rules.push_back(std::move(rule));
+        }
+
+        if (profile_name.empty()) {
+            profile_name = effective_profile.empty() ? "default" : effective_profile;
+        }
+
+        return true;
+    }
+
+    static bool source_type_allowed(const Rknpu2HybridRule & rule, ggml_type type) {
+        if (rule.source_quant_allow.empty()) {
+            return true;
+        }
+        const std::string needle = to_upper(ggml_type_name(type));
+        return std::find(rule.source_quant_allow.begin(), rule.source_quant_allow.end(), needle) != rule.source_quant_allow.end();
+    }
+
+    static bool rule_matches_tensor(const Rknpu2HybridRule & rule, const struct ggml_tensor * tensor, int layer_id) {
+        if (tensor == nullptr) {
+            return false;
+        }
+
+        const std::string name = tensor->name != nullptr ? tensor->name : "";
+        if (!std::regex_search(name, rule.match)) {
+            return false;
+        }
+
+        if (rule.has_layer_range && layer_id >= 0) {
+            if (layer_id < rule.layer_begin || layer_id > rule.layer_end) {
+                return false;
+            }
+        }
+
+        return source_type_allowed(rule, tensor->type);
+    }
 } // anonymous namespace
 
 namespace rknpu2_configuration {
@@ -165,15 +405,182 @@ const std::vector<std::string>* Rknpu2DeviceConfig::get_active_pattern(int tenso
     return &it->second;
 }
 
+const Rknpu2HardwarePipeline* Rknpu2DeviceConfig::find_pipeline(const std::string & name) const {
+    for (const auto & pipe : hardware_pipelines) {
+        if (pipe.pipeline_name == name) {
+            return &pipe;
+        }
+    }
+    return nullptr;
+}
+
+const Rknpu2HybridRoute* Rknpu2DeviceConfig::resolve_explicit_route(const struct ggml_tensor * w_tensor) const {
+    if (w_tensor == nullptr) {
+        return nullptr;
+    }
+
+    std::string name = w_tensor->name != nullptr ? w_tensor->name : "";
+    if (name.empty()) {
+        name = "ptr_" + std::to_string(reinterpret_cast<uintptr_t>(w_tensor));
+    }
+
+    std::lock_guard<std::mutex> lock(*pattern_mutex);
+    auto cache_key = std::make_pair(current_model_id, name);
+    auto it = explicit_route_cache.find(cache_key);
+    if (it == explicit_route_cache.end()) {
+        return nullptr;
+    }
+    return &it->second;
+}
+
+void Rknpu2DeviceConfig::clear_explicit_routes() const {
+    std::lock_guard<std::mutex> lock(*pattern_mutex);
+    explicit_route_cache.clear();
+}
+
+void Rknpu2DeviceConfig::register_explicit_route(const std::string & tensor_name, const std::string & pipeline_name, bool strict) const {
+    std::lock_guard<std::mutex> lock(*pattern_mutex);
+
+    Rknpu2HybridRoute route;
+    route.from_loader = true;
+    route.strict = strict;
+    route.layer_id = parse_layer_id(tensor_name);
+    route.role = derive_role(tensor_name);
+    route.rule_name = "loader";
+
+    const auto * pipeline = find_pipeline(pipeline_name);
+    if (pipeline == nullptr) {
+        route.valid = false;
+        route.fallback_reason = "unknown explicit pipeline";
+        if (strict) {
+            throw std::runtime_error("loader hybrid route references unknown RKNPU pipeline '" + pipeline_name + "'");
+        }
+    } else {
+        route.valid = true;
+        route.pipeline_name = pipeline_name;
+        route.pipeline = pipeline;
+    }
+
+    auto cache_key = std::make_pair(current_model_id, tensor_name);
+    explicit_route_cache[cache_key] = std::move(route);
+}
+
+const Rknpu2HybridRoute* Rknpu2DeviceConfig::resolve_manifest_route(const struct ggml_tensor * w_tensor) const {
+    if (!hybrid_manifest_loaded || w_tensor == nullptr) {
+        return nullptr;
+    }
+
+    std::string name = w_tensor->name != nullptr ? w_tensor->name : "";
+    if (name.empty()) {
+        name = "ptr_" + std::to_string(reinterpret_cast<uintptr_t>(w_tensor));
+    }
+
+    std::lock_guard<std::mutex> lock(*pattern_mutex);
+    auto cache_key = std::make_pair(current_model_id, name);
+    auto it = hybrid_route_cache.find(cache_key);
+    if (it != hybrid_route_cache.end()) {
+        return &it->second;
+    }
+
+    Rknpu2HybridRoute route;
+    route.layer_id = parse_layer_id(name);
+    route.role = derive_role(name);
+
+    for (const auto & rule : hybrid_manifest_rules) {
+        if (!rule_matches_tensor(rule, w_tensor, route.layer_id)) {
+            continue;
+        }
+
+        route.from_manifest = true;
+        route.strict = hybrid_manifest_strict || rule.required;
+        route.rule_name = rule.name.empty() ? rule.pipeline_name : rule.name;
+        if (!rule.role.empty()) {
+            route.role = rule.role;
+        }
+
+        if (rule.force_cpu) {
+            route.force_cpu = true;
+            route.valid = true;
+            route.fallback_reason = "manifest rule requests CPU";
+            hybrid_route_cache.emplace(cache_key, route);
+            if (hybrid_manifest_dump_plan) {
+                LLAMA_LOG_INFO("RKNPU2: manifest route %s -> CPU (%s, role=%s, layer=%d)\n",
+                    name.c_str(), route.rule_name.c_str(), route.role.c_str(), route.layer_id);
+            }
+            return &hybrid_route_cache.find(cache_key)->second;
+        }
+
+        if (rule.pipeline_name.empty()) {
+            route.fallback_reason = "manifest rule has no pipeline";
+            if (route.strict) {
+                throw std::runtime_error("hybrid manifest rule '" + route.rule_name + "' matched tensor '" + name + "' but did not name an NPU pipeline");
+            }
+            hybrid_route_cache.emplace(cache_key, route);
+            return &hybrid_route_cache.find(cache_key)->second;
+        }
+
+        const auto * pipeline = find_pipeline(rule.pipeline_name);
+        if (pipeline == nullptr) {
+            route.fallback_reason = "unknown manifest pipeline";
+            if (route.strict) {
+                throw std::runtime_error("hybrid manifest rule '" + route.rule_name + "' references unknown pipeline '" + rule.pipeline_name + "'");
+            }
+            hybrid_route_cache.emplace(cache_key, route);
+            return &hybrid_route_cache.find(cache_key)->second;
+        }
+
+        route.valid = true;
+        route.pipeline_name = pipeline->pipeline_name;
+        route.pipeline = pipeline;
+        hybrid_route_cache.emplace(cache_key, route);
+        if (hybrid_manifest_dump_plan) {
+            LLAMA_LOG_INFO("RKNPU2: manifest route %s -> %s (%s, role=%s, layer=%d)\n",
+                name.c_str(), route.pipeline_name.c_str(), route.rule_name.c_str(), route.role.c_str(), route.layer_id);
+        }
+        return &hybrid_route_cache.find(cache_key)->second;
+    }
+
+    return nullptr;
+}
+
+void Rknpu2DeviceConfig::dump_hybrid_manifest_summary() const {
+    if (!hybrid_manifest_loaded) {
+        return;
+    }
+
+    LLAMA_LOG_INFO("RKNPU2: hybrid manifest path=%s profile=%s default_policy=%s rules=%zu strict=%d dump_plan=%d\n",
+        hybrid_manifest_path.c_str(),
+        hybrid_manifest_profile.c_str(),
+        hybrid_manifest_default_policy.c_str(),
+        hybrid_manifest_rules.size(),
+        hybrid_manifest_strict ? 1 : 0,
+        hybrid_manifest_dump_plan ? 1 : 0);
+}
+
 const Rknpu2HardwarePipeline* Rknpu2DeviceConfig::resolve_op_support(const struct ggml_tensor* w_tensor) const {
     if (!w_tensor) return nullptr;
 
-    auto find_pipeline = [this](const std::string& name) -> const Rknpu2HardwarePipeline* {
-        for (const auto& pipe : hardware_pipelines) {
-            if (pipe.pipeline_name == name) return &pipe;
+    if (const auto * route = resolve_explicit_route(w_tensor)) {
+        if (route->force_cpu || route->pipeline == nullptr || !route->valid) {
+            return nullptr;
         }
-        return nullptr;
-    };
+        return route->pipeline;
+    }
+
+    if (hybrid_manifest_loaded) {
+        const auto * route = resolve_manifest_route(w_tensor);
+        if (route != nullptr) {
+            if (route->force_cpu || route->pipeline == nullptr || !route->valid) {
+                return nullptr;
+            }
+            // Return manifest-selected pipeline instead of falling through to legacy chooser
+            return route->pipeline;
+        }
+
+        if (to_upper(hybrid_manifest_default_policy) == "CPU_ONLY") {
+            return nullptr;
+        }
+    }
 
     // Retrieve active quantization pattern based on tensor type (or custom ENV variable)
     const std::vector<std::string>* pattern_ptr = get_active_pattern((int)w_tensor->type);
@@ -302,6 +709,33 @@ Rknpu2ConfigManager::Rknpu2ConfigManager() {
     rk3588_config.default_patterns[(int)GGML_TYPE_Q6_K] = {"INT8_STANDARD", "INT4_HADAMARD"};
     rk3588_config.default_patterns[(int)GGML_TYPE_Q4_0] = {"INT4_HADAMARD"};
 
+    // Optional env-driven hybrid manifest. This is a compatibility layer for the
+    // current workspace slice where loader/common plumbing is intentionally left untouched.
+    rk3588_config.hybrid_manifest_path = env_or_empty("HYBRID_MANIFEST");
+    rk3588_config.hybrid_manifest_profile = env_or_empty("HYBRID_PROFILE");
+    rk3588_config.hybrid_manifest_strict = env_flag_enabled("HYBRID_STRICT");
+    rk3588_config.hybrid_manifest_dump_plan = env_flag_enabled("HYBRID_DUMP_PLAN");
+
+    if (!rk3588_config.hybrid_manifest_path.empty()) {
+        std::string error;
+        if (load_manifest_rules(
+                rk3588_config.hybrid_manifest_path,
+                rk3588_config.hybrid_manifest_profile,
+                rk3588_config.hybrid_manifest_default_policy,
+                rk3588_config.hybrid_manifest_rules,
+                error)) {
+            rk3588_config.hybrid_manifest_loaded = true;
+            // Generate unique model ID to avoid cache collisions across models
+            rk3588_config.current_model_id = rk3588_config.hybrid_manifest_path + ":" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+        } else {
+            if (rk3588_config.hybrid_manifest_strict) {
+                throw std::runtime_error(error);
+            }
+            LLAMA_LOG_WARN("RKNPU2: ignoring hybrid manifest '%s': %s\n",
+                rk3588_config.hybrid_manifest_path.c_str(), error.c_str());
+        }
+    }
+
     device_configs["RK3588"] = rk3588_config;
 
     // --- Define RK3588S Configuration ---
@@ -348,10 +782,26 @@ bool Rknpu2ConfigManager::select_device(const std::string& device_name) {
         // selection for each new model load
         it->second.tensor_sequence_map.clear();
         it->second.global_tensor_counter = 0;
+        it->second.hybrid_route_cache.clear();
         current_config = &it->second;
+        if (current_config->hybrid_manifest_loaded && current_config->hybrid_manifest_dump_plan) {
+            current_config->dump_hybrid_manifest_summary();
+        }
         return true;
     }
     return false;
+}
+
+void Rknpu2ConfigManager::clear_explicit_routes() {
+    if (current_config != nullptr) {
+        current_config->clear_explicit_routes();
+    }
+}
+
+void Rknpu2ConfigManager::register_explicit_route(const std::string & tensor_name, const std::string & pipeline_name, bool strict) {
+    if (current_config != nullptr) {
+        current_config->register_explicit_route(tensor_name, pipeline_name, strict);
+    }
 }
 
 const Rknpu2DeviceConfig& Rknpu2ConfigManager::get_current_config() const {

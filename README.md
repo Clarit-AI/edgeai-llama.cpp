@@ -1,11 +1,15 @@
-# ik_llama.cpp: llama.cpp fork with better CPU performance
+# edgeai_llama.cpp: llama.cpp fork with better CPU performance and Rockchip NPU Support.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-## TL;DR
+## 🧬 Project Origin & Architecture
 
-This repository is a fork of [llama.cpp](https://github.com/ggerganov/llama.cpp) with better CPU and hybrid GPU/CPU performance, new SOTA quantization types, first-class Bitnet support, better DeepSeek performance via MLA, FlashMLA, fused MoE operations and tensor overrides for hybrid GPU/CPU inference, row-interleaved quant packing, etc.
+This repository is a **multi-source integration** designed to provide a unified high-performance binary for both modern CPUs and Rockchip NPU hardware. It maintains synchronization with two primary upstream sources:
 
+* **Core Engine:** [ikawrakow/ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp) – Integrated for SOTA quantization (IQ), Bitnet support, and optimized CPU/CUDA kernels.
+* **NPU Backend:** [KHAEntertainment/rk-llama.cpp](https://github.com/KHAEntertainment/rk-llama.cpp) – Our maintained fork of the original Rockchip implementation, significantly refactored to remain compatible with modern `ggml` changes that the original `invisiofficial` source lacks (like Qwen3.5 support for example).
+
+By merging these branches, `edgeai_llama.cpp` allows for hybrid inference workflows that aren't possible in the standalone upstream repositories.
 >[!NOTE]
 >The only fully functional and performant compute backends are CPU (`AVX2` or better, `ARM_NEON` or better), CUDA, and **Rockchip NPU** (via RKNPU2).
 >Metal support is functional but may have issues. Please do not enter issues related to ROCm, Vulkan, etc. They will not get resolved unless you roll up your sleeves and help bring your favorite backend up to speed.
@@ -15,8 +19,18 @@ This repository is a fork of [llama.cpp](https://github.com/ggerganov/llama.cpp)
 >
 >The above has caused some stir, so to clarify: the Unsloth `_XL` models that are likely to not work are those that contain `f16` tensors (which is never a good idea in the first place). All others are fine.
 
+### 🔄 Upstream Sync Status
+
+| Component | Source | Sync Frequency |
+| :--- | :--- | :--- |
+| **CPU/Quantization** | `ik_llama.cpp` | Weekly (Main Tracking Branch) |
+| **Rockchip NPU** | `KHA/rk-llama.cpp` | As needed (Custom Hardware Patches) |
+| **GGML Core** | `ggerganov/llama.cpp` | Via `ik` tracking |
+
 >[!NOTE]
->Some users have reported issues with graph parallel (a.k.a. split mode `graph`) and partial GPU offload (using `--cpu-moe` or `--n-cpu-moe` or tensor overrides). If you are using/want to use split mode graph and observe gibberish/incoherent responses, try adding `-cuda graphs=0` to your command line.
+> - Some users have reported issues with graph parallel (a.k.a. split mode `graph`) and partial GPU offload (using `--cpu-moe` or `--n-cpu-moe` or tensor overrides). If you are using/want to use split mode graph and observe gibberish/incoherent responses, try adding `-cuda graphs=0` to your command line.
+> - **Hardware Support:** This fork is specifically optimized for CPU (AVX2/ARM_NEON), CUDA, and Rockchip NPU.
+Unlike other Rockchip forks, our NPU backend has been modernized to support current ggml standards, preventing the 1000+ commit "lag" found in older implementations.
   
 ## Quickstart
 
@@ -94,6 +108,29 @@ That's all! Open [http://127.0.0.1:8080](http://127.0.0.1:8080) in Browser start
 ### [Common parameters and options](./docs/parameters.md)
 
 ### [Rockchip NPU / RKNPU2 Backend](./docs/npu/README.md) - Neural Processing Unit acceleration for RK3588/RK3576
+
+### Performance Optimization for CPU/ARM
+
+For best performance on CPU-only or ARM devices (including Rockchip RK3588/RK3576, Apple Silicon):
+
+```bash
+./build/bin/llama-server \
+  -m model-IQ4_K_R4.gguf \
+  -t 4 -c 4096 \
+  -fa -fmoe -ctk q8_0 -ctv q8_0 \
+  -b 2048 -ub 2048 -rtr
+```
+
+**Key optimizations:**
+- **IQ4_K_R4 / IQ3_K_R4**: 1.7-1.9x faster than standard IQ formats on ARM NEON
+- **-fa**: Flash attention for major prompt processing speedup
+- **-fmoe**: Fused MoE operations for MoE models
+- **-ctk/-ctv q8_0**: KV cache quantization reduces memory pressure
+- **-rtr**: Runtime tensor repacking enables R4 variant performance
+
+> **KT formats (IQ3_KT, IQ4_KT) have poor CPU/ARM performance** - use K formats instead.
+
+See [CPU/ARM Optimization Guide](./docs/cpu-arm-optimization.md) for comprehensive coverage including quantization selection, build options, performance benchmarks, and instructions for quantizing your own models.
 
 ## Latest News
 

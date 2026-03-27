@@ -397,6 +397,7 @@ struct llama_model {
     int n_gpu_layers;
 
     bool mtp; // use mtp if is supported by the Model
+    bool dry_run = false; // model loaded in dry-run mode (hybrid_dry_run)
 
     std::vector<rpc_device> rpc_servers;
     std::vector<int32_t> devices;
@@ -541,4 +542,3 @@ struct LLM_TN {
 std::string llama_model_ftype_name(llama_ftype ftype);
 
 const char * llama_model_type_name(e_model type);
-

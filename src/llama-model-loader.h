@@ -32,6 +32,23 @@ using llama_buf_map = std::unordered_map<uint32_t, ggml_backend_buffer_t>;
 
 struct llama_layer;
 
+enum llama_hybrid_route_source {
+    LLAMA_HYBRID_ROUTE_SOURCE_LEGACY = 0,
+    LLAMA_HYBRID_ROUTE_SOURCE_OVERRIDE,
+    LLAMA_HYBRID_ROUTE_SOURCE_MANIFEST,
+};
+
+struct llama_hybrid_route {
+    std::string tensor_name;
+    int         layer_id = -1;
+    std::string role;
+    ggml_backend_buffer_type_t buft = nullptr;
+    std::string backend_name;
+    std::string npu_pipeline;
+    llama_hybrid_route_source source = LLAMA_HYBRID_ROUTE_SOURCE_LEGACY;
+    std::string reason;
+};
+
 struct llama_model_loader {
     int n_kv      = 0;
     int n_tensors = 0;
@@ -75,6 +92,13 @@ struct llama_model_loader {
 
     std::unordered_map<std::string, struct llama_model_kv_override> kv_overrides;
     const llama_model_tensor_buft_override * tensor_buft_overrides;
+    std::unordered_map<std::string, llama_hybrid_route> hybrid_routes;
+    std::vector<llama_hybrid_route> hybrid_plan;
+    std::string hybrid_manifest_path;
+    std::string hybrid_profile;
+    bool hybrid_dry_run = false;
+    bool hybrid_dump_plan = false;
+    bool hybrid_strict = false;
 
     gguf_context * meta = NULL;
     std::vector<ggml_context *> contexts;
@@ -85,7 +109,12 @@ struct llama_model_loader {
     llama_model_loader(const std::string & fname, int ncmoe, bool use_mmap, bool check_tensors, bool repack_tensors, bool use_thp,
             bool merge_qkv, bool merge_up_gate_exps,
             const llama_model_kv_override * param_overrides_p,
-            const llama_model_tensor_buft_override * param_tensor_buft_overrides_p);
+            const llama_model_tensor_buft_override * param_tensor_buft_overrides_p,
+            const char * hybrid_manifest_path = nullptr,
+            const char * hybrid_profile = nullptr,
+            bool hybrid_dry_run = false,
+            bool hybrid_dump_plan = false,
+            bool hybrid_strict = false);
 
     ~llama_model_loader();
 
@@ -131,6 +160,10 @@ struct llama_model_loader {
         return get_weight(get_tensor_name(i));
     }
 
+    const llama_hybrid_route * get_hybrid_route(const std::string & name) const;
+    const llama_hybrid_route * get_hybrid_route(const char * name) const;
+    void dump_hybrid_plan() const;
+
     const llama_tensor_weight & require_weight(const char * name) const;
 
     struct ggml_tensor * get_tensor_meta(const char * name) const;
@@ -174,6 +207,10 @@ struct llama_model_loader {
             llama_mlocks * lmlocks,
             llama_progress_callback progress_callback,
             void * progress_callback_user_data);
+
+private:
+    void build_hybrid_plan();
+    void dump_hybrid_plan_impl(bool verbose) const;
 };
 
 void llm_load_arch(llama_model_loader & ml, llama_model & model);

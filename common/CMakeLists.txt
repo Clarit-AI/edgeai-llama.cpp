@@ -67,6 +67,8 @@ add_library(${TARGET} STATIC
     sampling.cpp
     console.h
     console.cpp
+    hybrid-manifest.h
+    hybrid-manifest.cpp
     json-partial.h
     json-partial.cpp
     llguidance.cpp

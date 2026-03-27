@@ -500,6 +500,11 @@ void gpt_params_parse_from_env(gpt_params & params) {
     get_env("LLAMA_ARG_CACHE_TYPE_V",     params.cache_type_v);
     get_env("LLAMA_ARG_MLOCK",            params.use_mlock);
     get_env("LLAMA_ARG_K_CACHE_HADAMARD", params.k_cache_hadamard);
+    get_env("LLAMA_ARG_HYBRID_MANIFEST",  params.hybrid_manifest);
+    get_env("LLAMA_ARG_HYBRID_PROFILE",   params.hybrid_profile);
+    get_env("LLAMA_ARG_HYBRID_DRY_RUN",   params.hybrid_dry_run);
+    get_env("LLAMA_ARG_HYBRID_DUMP_PLAN", params.hybrid_dump_plan);
+    get_env("LLAMA_ARG_HYBRID_STRICT",    params.hybrid_strict);
 
 }
 
@@ -1555,7 +1560,8 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "--cpu-moe" || arg == "-cmoe") {
-        params.tensor_buft_overrides.push_back({strdup("\\.ffn_(up|down|gate|gate_up)_exps\\.weight"), ggml_backend_cpu_buffer_type()});
+        params.ncmoe = 999;
+        //params.tensor_buft_overrides.push_back({strdup("\\.ffn_(up|down|gate|gate_up)_exps\\.weight"), ggml_backend_cpu_buffer_type()});
         return true;
     }
     if (arg == "--hybrid-manifest") {
@@ -1589,6 +1595,21 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         //    std::string pattern = "blk\\." + std::to_string(l) + "\\.(ffn_(up|down|gate|gate_up)_exps\\.weight)";
         //    params.tensor_buft_overrides.push_back({strdup(pattern.c_str()), ggml_backend_cpu_buffer_type()});
         //}
+        return true;
+    }
+    if (arg == "--fit") {
+        params.fit = true;
+        return true;
+    }
+    if (arg == "--fit-margin") {
+        CHECK_ARG;
+        int32_t margin = std::stoi(argv[i]);
+        if (margin < 0) {
+            fprintf(stderr, "error: Invalid value for --fit-margin: %d (must be >= 0)\n", margin);
+            invalid_param = true;
+        } else {
+            params.fit_margin = margin;
+        }
         return true;
     }
     if (arg == "--no-mmap") {
@@ -1829,6 +1850,28 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.dry_run = true;
         return true;
     }
+    if (arg == "--hybrid-manifest") {
+        CHECK_ARG
+        params.hybrid_manifest = argv[i];
+        return true;
+    }
+    if (arg == "--hybrid-profile") {
+        CHECK_ARG
+        params.hybrid_profile = argv[i];
+        return true;
+    }
+    if (arg == "--hybrid-dry-run") {
+        params.hybrid_dry_run = true;
+        return true;
+    }
+    if (arg == "--hybrid-dump-plan") {
+        params.hybrid_dump_plan = true;
+        return true;
+    }
+    if (arg == "--hybrid-strict") {
+        params.hybrid_strict = true;
+        return true;
+    }
     if (arg == "--in-prefix-bos") {
         params.input_prefix_bos = true;
         params.enable_chat_template = false;
@@ -2048,6 +2091,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "--jinja") {
         params.use_jinja = true;
+        return true;
+    }
+    if (arg == "--peg") {
+        params.use_peg = true;
         return true;
     }
     if (arg == "--chat-template-kwargs") {
@@ -2337,6 +2384,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-h,    --help, --usage",        "print usage and exit" });
     options.push_back({ "*",           "       --version",              "show version and build info" });
     options.push_back({ "*",           "-v,    --verbose",              "print verbose information" });
+    options.push_back({ "*",           "       --minilog",              "print important information" });
     options.push_back({ "*",           "       --verbosity N",          "set specific verbosity level (default: %d)", params.verbosity });
     options.push_back({ "*",           "       --verbose-prompt",       "print a verbose prompt before generation (default: %s)", params.verbose_prompt ? "true" : "false" });
     options.push_back({ "*",           "-dr,   --dry-run",       "skip loading tensors in the files"});
@@ -2465,6 +2513,9 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "if suffix/prefix are specified, template will be disabled\n"
                                                                         "only commonly used templates are accepted:\n"
                                                                         "https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template" });
+    options.push_back({ "main",        "       --peg",
+                                                                    "use peg parser for qwen3.5 models.\n"
+                                                                    "https://github.com/ikawrakow/ik_llama.cpp/pull/1490" });
     options.push_back({ "main",        "       --chat-template JINJA_TEMPLATE",
                                                                         "use jinja template for chat (default: disabled)\n" });
     options.push_back({ "main",        "       --chat-template-file file_with_JINJA_TEMPLATE",
@@ -2553,6 +2604,11 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --rpc SERVERS",          "comma separated list of RPC servers" });
     options.push_back({ "*",           "-cuda, --cuda-params",          "comma separate list of cuda parameters" });
     options.push_back({ "*",           "-draft, --draft-params",        "comma separate list of draft model parameters" });
+    options.push_back({ "*",           "       --hybrid-manifest FILE",  "path to a hybrid manifest sidecar or explicit manifest file" });
+    options.push_back({ "*",           "       --hybrid-profile NAME",   "select a named hybrid manifest profile (default: manifest active_profile)" });
+    options.push_back({ "*",           "       --hybrid-dry-run",        "resolve and validate a hybrid manifest without loading tensors" });
+    options.push_back({ "*",           "       --hybrid-dump-plan",      "print the resolved hybrid plan during model load" });
+    options.push_back({ "*",           "       --hybrid-strict",         "fail when hybrid manifest rules cannot be satisfied" });
     if (llama_supports_mlock()) {
         options.push_back({ "*",           "       --mlock",                "force system to keep model in RAM rather than swapping or compressing" });
     }
@@ -2562,10 +2618,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --run-time-repack",      "repack tensors if interleaved variant is available"});
     options.push_back({ "*",           "       --cpu-moe",              "keep all MoE weights in CPU memory"});
     options.push_back({ "*",           "       --n-cpu-moe N",          "keep MoE weights of the first N layers in CPU memory"});
-    options.push_back({ "*",           "       --hybrid-manifest FILE", "load hybrid routing manifest from FILE or default model sidecar"});
-    options.push_back({ "*",           "       --hybrid-strict",        "fail on hybrid manifest validation problems instead of silently continuing"});
-    options.push_back({ "*",           "       --hybrid-dry-run",       "print the resolved hybrid routing plan before model load"});
-    options.push_back({ "*",           "       --hybrid-dump-plan FILE","write the resolved hybrid routing plan JSON to FILE"});
+    options.push_back({ "*",           "       --fit-margin N",         "safety margin in MiB when auto-fitting model offloading"});
+    options.push_back({ "*",           "       --fit",                  "automatically determine which tensors to offload to the GPU(s)"});
     options.push_back({ "*",           "       --numa TYPE",            "attempt optimizations that help on some NUMA systems\n"
                                                                         "  - distribute: spread execution evenly over all nodes\n"
                                                                         "  - isolate: only spawn threads on CPUs on the node that execution started on\n"
@@ -3396,9 +3450,13 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.mla             = params.mla_attn;
     mparams.dry_run         = params.dry_run;
     mparams.rpc_servers     = params.rpc_servers.c_str();
+    mparams.hybrid_manifest = params.hybrid_manifest.empty() ? nullptr : params.hybrid_manifest.c_str();
+    mparams.hybrid_profile  = params.hybrid_profile.empty() ? nullptr : params.hybrid_profile.c_str();
     mparams.main_gpu        = params.main_gpu;
     mparams.max_gpu         = params.max_gpu;
     mparams.ncmoe           = params.ncmoe;
+    mparams.fit             = params.fit;
+    mparams.fit_margin      = params.fit_margin;
     mparams.type_k          = kv_cache_type_from_str(params.cache_type_k);
     mparams.type_v          = kv_cache_type_from_str(params.cache_type_v);
     mparams.max_ctx_size    = params.n_ctx;
@@ -3417,6 +3475,9 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.merge_up_gate_exps = params.merge_up_gate_exps;
     mparams.mtp             = params.has_mtp;
     mparams.flash_attn      = params.flash_attn;
+    mparams.hybrid_dry_run  = params.hybrid_dry_run;
+    mparams.hybrid_dump_plan = params.hybrid_dump_plan;
+    mparams.hybrid_strict   = params.hybrid_strict;
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;
     } else {
@@ -4397,6 +4458,12 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "chunks: %d # default: -1 (unlimited)\n", params.n_chunks);
     fprintf(stream, "color: %s # default: false\n", params.use_color ? "true" : "false");
     fprintf(stream, "ctx_size: %d # default: 512\n", params.n_ctx);
+    fprintf(stream, "dry_run: %s # default: false\n", params.dry_run ? "true" : "false");
+    fprintf(stream, "hybrid_manifest: %s # default: none\n", params.hybrid_manifest.empty() ? "none" : params.hybrid_manifest.c_str());
+    fprintf(stream, "hybrid_profile: %s # default: none\n", params.hybrid_profile.empty() ? "none" : params.hybrid_profile.c_str());
+    fprintf(stream, "hybrid_dry_run: %s # default: false\n", params.hybrid_dry_run ? "true" : "false");
+    fprintf(stream, "hybrid_dump_plan: %s # default: false\n", params.hybrid_dump_plan ? "true" : "false");
+    fprintf(stream, "hybrid_strict: %s # default: false\n", params.hybrid_strict ? "true" : "false");
     fprintf(stream, "dry_allowed_length: %d # default: 2\n", sparams.dry_allowed_length);
     fprintf(stream, "dry_base: %.2f # default: 1.75\n", sparams.dry_base);
     fprintf(stream, "dry_multiplier: %.1f # default: 0.0\n", sparams.dry_multiplier);
@@ -4445,6 +4512,8 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "main_gpu: %d # default: 0\n", params.main_gpu);
     fprintf(stream, "max_gpu: %d # default: 0\n", params.max_gpu);
     fprintf(stream, "ncmoe: %d # default: 0\n", params.ncmoe);
+    fprintf(stream, "fit: %d # default: false\n", params.fit);
+    fprintf(stream, "fit_margin: %d # default: 0\n", params.fit_margin);
     fprintf(stream, "min_keep: %d # default: 0 (disabled)\n", sparams.min_keep);
     fprintf(stream, "mirostat: %d # default: 0 (disabled)\n", sparams.mirostat);
     fprintf(stream, "mirostat_ent: %f # default: 5.0\n", sparams.mirostat_tau);

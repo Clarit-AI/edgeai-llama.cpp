@@ -10,6 +10,7 @@
 #include <cassert>
 #include <chrono>
 #include <cinttypes>
+#include <cctype>
 #include <clocale>
 #include <cmath>
 #include <cstdio>
@@ -182,6 +183,11 @@ static std::string get_gpu_info() {
     return id;
 }
 
+static std::string get_env_string(const char * name) {
+    const char * value = std::getenv(name);
+    return value == nullptr ? std::string() : std::string(value);
+}
+
 // command line params
 enum output_formats {NONE, CSV, JSON, MARKDOWN, SQL};
 
@@ -273,6 +279,9 @@ struct cmd_params {
     bool sas = false;
     int  max_gpu = 0;
     bool print_overrides = false;
+    std::string hybrid_manifest;
+    std::string hybrid_profile;
+    bool hybrid_strict = false;
     output_formats output_format;
     output_formats output_format_stderr;
 };
@@ -319,6 +328,9 @@ static const cmd_params cmd_params_defaults = {
     /* sas                  */ false,
     /* max_gpu              */ 0,
     /* print_overrides      */ false,
+    /* hybrid_manifest      */ {},
+    /* hybrid_profile       */ {},
+    /* hybrid_strict        */ false,
     /* output_format        */ MARKDOWN,
     /* output_format_stderr */ NONE,
 };
@@ -986,6 +998,15 @@ struct cmd_params_instance {
         mparams.tensor_buft_overrides = buft_overrides;
         mparams.mla = mla_attn;
         mparams.max_gpu = max_gpu;
+        if (test::hybrid_manifest_enabled && !test::hybrid_manifest.empty()) {
+            mparams.hybrid_manifest = test::hybrid_manifest.c_str();
+        }
+        if (test::hybrid_profile_enabled && !test::hybrid_profile.empty()) {
+            mparams.hybrid_profile = test::hybrid_profile.c_str();
+        }
+        if (test::hybrid_strict_enabled) {
+            mparams.hybrid_strict = true;
+        }
 
         return mparams;
     }
@@ -1249,6 +1270,11 @@ struct test {
     static const bool blas;
     static const std::string cpu_info;
     static const std::string gpu_info;
+    static const bool hybrid_manifest_enabled;
+    static const bool hybrid_profile_enabled;
+    static const bool hybrid_strict_enabled;
+    static const std::string hybrid_manifest;
+    static const std::string hybrid_profile;
     std::string model_filename;
     std::string model_type;
     uint64_t model_size;
@@ -1436,7 +1462,7 @@ struct test {
             field == "gpu_blas" || field == "blas" || field == "sycl" || field == "no_kv_offload" ||
             field == "flash_attn" || field == "use_mmap" || field == "embeddings" || field == "repack" || field == "use_thp" ||
             field == "fused_moe" || field == "grouped_er" || field == "no_fused_up_gate" || field == "no_ooae" || field == "mqkv" ||
-            field == "rcache" || field == "reuse" || field == "muge" || field == "sas") {
+            field == "rcache" || field == "reuse" || field == "muge" || field == "sas" || field == "hybrid_strict") {
             return BOOL;
         }
         if (field == "avg_ts" || field == "stddev_ts") {
@@ -1483,6 +1509,9 @@ struct test {
             std::to_string(no_fug), std::to_string(use_thp), std::to_string(no_ooae), std::to_string(rcache), std::to_string(sas),
             std::to_string(max_gpu),
             cuda_params, override_tensor,
+            hybrid_manifest_enabled ? hybrid_manifest : std::string(),
+            hybrid_profile_enabled ? hybrid_profile : std::string(),
+            hybrid_strict_enabled ? "1" : "0",
             std::to_string(n_prompt), std::to_string(n_gen), test_time,
             std::to_string(avg_ns()), std::to_string(stdev_ns()),
             std::to_string(avg_ts()), std::to_string(stdev_ts()),
@@ -1503,6 +1532,7 @@ struct test {
             "main_gpu", "no_kv_offload", "flash_attn", "mla_attn", "attn_max_batch", "ser", "reuse",
             "tensor_split", "use_mmap", "embeddings", "repack", "mqkv", "muge", "fused_moe", "grouped_er",
             "no_fused_up_gate", "use_thp", "no_ooae", "rcache", "sas", "max_gpu", "cuda_params", "override_tensor",
+            "hybrid_manifest", "hybrid_profile", "hybrid_strict",
             "n_prompt", "n_gen", "test_time",
             "avg_ns", "stddev_ns",
             "avg_ts", "stddev_ts", "test",
@@ -1531,6 +1561,22 @@ const bool        test::blas         = !!ggml_cpu_has_blas();
 const bool        test::sycl         = !!ggml_cpu_has_sycl();
 const std::string test::cpu_info     = get_cpu_info();
 const std::string test::gpu_info     = get_gpu_info();
+const bool        test::hybrid_manifest_enabled = !get_env_string("HYBRID_MANIFEST").empty();
+const bool        test::hybrid_profile_enabled = !get_env_string("HYBRID_PROFILE").empty();
+const bool        test::hybrid_strict_enabled = []() {
+    const std::string value = get_env_string("HYBRID_STRICT");
+    if (value.empty()) {
+        return false;
+    }
+    if (value == "0") {
+        return false;
+    }
+    std::string upper = value;
+    std::transform(upper.begin(), upper.end(), upper.begin(), [](unsigned char c) { return (char) std::toupper(c); });
+    return upper != "FALSE" && upper != "NO" && upper != "OFF";
+}();
+const std::string test::hybrid_manifest = get_env_string("HYBRID_MANIFEST");
+const std::string test::hybrid_profile = get_env_string("HYBRID_PROFILE");
 
 struct printer {
     virtual ~printer() {}
@@ -1801,6 +1847,15 @@ struct markdown_printer : public printer {
         if (field == "override_tensor") {
             return "ot";
         }
+        if (field == "hybrid_manifest") {
+            return "hmani";
+        }
+        if (field == "hybrid_profile") {
+            return "hprof";
+        }
+        if (field == "hybrid_strict") {
+            return "hstrict";
+        }
         return field;
     }
 
@@ -1904,6 +1959,15 @@ struct markdown_printer : public printer {
         }
         if (params.no_ooae != cmd_params_defaults.no_ooae) {
             fields.emplace_back("no_ooae");
+        }
+        if (params.hybrid_manifest != cmd_params_defaults.hybrid_manifest) {
+            fields.emplace_back("hybrid_manifest");
+        }
+        if (params.hybrid_profile != cmd_params_defaults.hybrid_profile) {
+            fields.emplace_back("hybrid_profile");
+        }
+        if (params.hybrid_strict != cmd_params_defaults.hybrid_strict) {
+            fields.emplace_back("hybrid_strict");
         }
         fields.emplace_back("test");
         fields.emplace_back("t/s");
