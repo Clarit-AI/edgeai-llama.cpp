@@ -2,7 +2,7 @@
 
 You are running on or against a ROCK 5 / RK3588 environment for the repository:
 
-`<repository-root>/edgeai-llama.cpp`
+`<repository-root>`
 
 ## Goal
 Audit strict-mode behavior and fallback correctness on real hardware.

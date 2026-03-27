@@ -6,8 +6,10 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <charconv>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <regex>
 #include <set>
 #include <string_view>
@@ -104,7 +106,18 @@ std::optional<int> parse_generated_rule_number(std::string_view name) {
         }
     }
 
-    return std::stoi(std::string(suffix));
+    long long parsed_value = 0;
+    auto [ptr, ec] = std::from_chars(suffix.data(), suffix.data() + suffix.size(), parsed_value);
+
+    if (ec != std::errc() || ptr != suffix.data() + suffix.size()) {
+        return std::nullopt;
+    }
+
+    if (parsed_value < std::numeric_limits<int>::min() || parsed_value > std::numeric_limits<int>::max()) {
+        return std::nullopt;
+    }
+
+    return static_cast<int>(parsed_value);
 }
 
 bool plan_entry_less(const plan_entry & lhs, const plan_entry & rhs) {

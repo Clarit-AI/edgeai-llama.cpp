@@ -2,7 +2,7 @@
 
 You are working in the repository at:
 
-`<repository-root>/edgeai-llama.cpp`
+`<repository-root>`
 
 ## Context
 - Phase 1 manifest routing is merged.

@@ -2,7 +2,7 @@
 
 You are running on or against a ROCK 5 / RK3588 environment for the repository:
 
-`<repository-root>/edgeai-llama.cpp`
+`<repository-root>`
 
 ## Goal
 Tune manifest rules based on measured RK3588 behavior.
