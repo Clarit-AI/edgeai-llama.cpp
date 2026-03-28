@@ -646,7 +646,7 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
         const char * hybrid_manifest_path_p,
         const char * hybrid_profile_p,
         bool hybrid_dry_run_p,
-        bool hybrid_dump_plan_p,
+        const char * hybrid_dump_plan_p,
         bool hybrid_strict_p) {
     int trace = 0;
     if (getenv("LLAMA_TRACE")) {
@@ -680,9 +680,9 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
     tensor_buft_overrides = param_tensor_buft_overrides_p;
     hybrid_manifest_path = hybrid_manifest_path_p ? hybrid_manifest_path_p : get_env_string_fallback({"LLAMA_HYBRID_MANIFEST", "HYBRID_MANIFEST"});
     hybrid_profile = hybrid_profile_p ? hybrid_profile_p : get_env_string_fallback({"LLAMA_HYBRID_PROFILE", "HYBRID_PROFILE"});
+    hybrid_dump_plan = hybrid_dump_plan_p ? hybrid_dump_plan_p : get_env_string_fallback({"LLAMA_HYBRID_DUMP_PLAN", "HYBRID_DUMP_PLAN"});
     // For booleans, only use env if param was not explicitly provided (default false)
     hybrid_dry_run = hybrid_dry_run_p ? hybrid_dry_run_p : get_env_bool_fallback({"LLAMA_HYBRID_DRY_RUN", "HYBRID_DRY_RUN"});
-    hybrid_dump_plan = hybrid_dump_plan_p ? hybrid_dump_plan_p : get_env_bool_fallback({"LLAMA_HYBRID_DUMP_PLAN", "HYBRID_DUMP_PLAN"});
     hybrid_strict = hybrid_strict_p ? hybrid_strict_p : get_env_bool_fallback({"LLAMA_HYBRID_STRICT", "HYBRID_STRICT"});
     if (hybrid_manifest_path.empty()) {
         const std::string default_manifest_path = fname + ".hybrid.json";
@@ -1233,7 +1233,7 @@ void llama_model_loader::build_hybrid_plan() {
     }
 #endif
 
-    if (manifest_enabled || hybrid_dump_plan || hybrid_dry_run) {
+    if (manifest_enabled || !hybrid_dump_plan.empty() || hybrid_dry_run) {
         dump_hybrid_plan_impl(true);
     }
 }

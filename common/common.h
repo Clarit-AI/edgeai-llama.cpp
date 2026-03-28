@@ -382,9 +382,9 @@ struct gpt_params {
     common_params_model mmproj;
     bool mmproj_use_gpu = true;     // use GPU for multimodal model
     bool no_mmproj = false;         // explicitly disable multimodal model
-    std::vector<std::string> image; // path to image file(s)
-    int image_min_tokens = -1;
-    int image_max_tokens = -1;
+    bool        hybrid_dry_run   = false; // resolve hybrid manifest and stop before tensor loading
+    std::string hybrid_dump_plan = "";    // output path for resolved hybrid tensor plan (empty = disabled)
+    bool        hybrid_strict    = false; // fail on unsupported hybrid manifest rules instead of falling back
 
     // embedding
     bool embedding         = false; // get only sentence embedding
