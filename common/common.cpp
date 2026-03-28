@@ -613,12 +613,8 @@ void maybe_apply_hybrid_manifest(gpt_params & params) {
         set_process_env("HYBRID_PATTERN", hybrid_pattern);
     }
 
-    if (!params.hybrid_dump_plan.empty()) {
-        std::ofstream out(params.hybrid_dump_plan);
-        if (!out) {
-            throw std::runtime_error(format("failed to write hybrid plan to '%s'", params.hybrid_dump_plan.c_str()));
-        }
-        out << plan_json.dump(2) << "\n";
+    if (params.hybrid_dump_plan) {
+        fprintf(stdout, "%s\n", plan_json.dump(2).c_str());
     }
 
     if (params.hybrid_dry_run) {
@@ -1578,8 +1574,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "--hybrid-dump-plan") {
-        CHECK_ARG
-        params.hybrid_dump_plan = argv[i];
+        params.hybrid_dump_plan = true;
         return true;
     }
     if (arg == "--n-cpu-moe" || arg == "-ncmoe") {
