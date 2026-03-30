@@ -96,8 +96,8 @@ struct llama_model_loader {
     std::vector<llama_hybrid_route> hybrid_plan;
     std::string hybrid_manifest_path;
     std::string hybrid_profile;
+    std::string hybrid_dump_plan;
     bool hybrid_dry_run = false;
-    bool hybrid_dump_plan = false;
     bool hybrid_strict = false;
 
     gguf_context * meta = NULL;
@@ -113,7 +113,7 @@ struct llama_model_loader {
             const char * hybrid_manifest_path = nullptr,
             const char * hybrid_profile = nullptr,
             bool hybrid_dry_run = false,
-            bool hybrid_dump_plan = false,
+            const char * hybrid_dump_plan = nullptr,
             bool hybrid_strict = false);
 
     ~llama_model_loader();

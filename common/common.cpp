@@ -616,9 +616,9 @@ void maybe_apply_hybrid_manifest(gpt_params & params) {
     if (!params.hybrid_dump_plan.empty()) {
         std::ofstream out(params.hybrid_dump_plan);
         if (!out) {
-            throw std::runtime_error(format("failed to write hybrid plan to '%s'", params.hybrid_dump_plan.c_str()));
+            throw std::runtime_error(format("failed to open hybrid dump plan output: %s", params.hybrid_dump_plan.c_str()));
         }
-        out << plan_json.dump(2) << "\n";
+        out << plan_json.dump(2) << '\n';
     }
 
     if (params.hybrid_dry_run) {
@@ -1865,7 +1865,8 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "--hybrid-dump-plan") {
-        params.hybrid_dump_plan = true;
+        CHECK_ARG
+        params.hybrid_dump_plan = argv[i];
         return true;
     }
     if (arg == "--hybrid-strict") {
@@ -2607,7 +2608,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --hybrid-manifest FILE",  "path to a hybrid manifest sidecar or explicit manifest file" });
     options.push_back({ "*",           "       --hybrid-profile NAME",   "select a named hybrid manifest profile (default: manifest active_profile)" });
     options.push_back({ "*",           "       --hybrid-dry-run",        "resolve and validate a hybrid manifest without loading tensors" });
-    options.push_back({ "*",           "       --hybrid-dump-plan",      "print the resolved hybrid plan during model load" });
+    options.push_back({ "*",           "       --hybrid-dump-plan FILE", "write the resolved hybrid plan JSON to FILE during pre-load processing" });
     options.push_back({ "*",           "       --hybrid-strict",         "fail when hybrid manifest rules cannot be satisfied" });
     if (llama_supports_mlock()) {
         options.push_back({ "*",           "       --mlock",                "force system to keep model in RAM rather than swapping or compressing" });
@@ -3476,7 +3477,7 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.mtp             = params.has_mtp;
     mparams.flash_attn      = params.flash_attn;
     mparams.hybrid_dry_run  = params.hybrid_dry_run;
-    mparams.hybrid_dump_plan = params.hybrid_dump_plan;
+    mparams.hybrid_dump_plan = params.hybrid_dump_plan.empty() ? nullptr : params.hybrid_dump_plan.c_str();
     mparams.hybrid_strict   = params.hybrid_strict;
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;
@@ -4462,7 +4463,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "hybrid_manifest: %s # default: none\n", params.hybrid_manifest.empty() ? "none" : params.hybrid_manifest.c_str());
     fprintf(stream, "hybrid_profile: %s # default: none\n", params.hybrid_profile.empty() ? "none" : params.hybrid_profile.c_str());
     fprintf(stream, "hybrid_dry_run: %s # default: false\n", params.hybrid_dry_run ? "true" : "false");
-    fprintf(stream, "hybrid_dump_plan: %s # default: false\n", params.hybrid_dump_plan ? "true" : "false");
+    fprintf(stream, "hybrid_dump_plan: %s # default: none\n", params.hybrid_dump_plan.empty() ? "none" : params.hybrid_dump_plan.c_str());
     fprintf(stream, "hybrid_strict: %s # default: false\n", params.hybrid_strict ? "true" : "false");
     fprintf(stream, "dry_allowed_length: %d # default: 2\n", sparams.dry_allowed_length);
     fprintf(stream, "dry_base: %.2f # default: 1.75\n", sparams.dry_base);

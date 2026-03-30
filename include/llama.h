@@ -418,7 +418,7 @@ extern "C" {
         const char * hybrid_manifest;
         const char * hybrid_profile;
         bool hybrid_dry_run;
-        bool hybrid_dump_plan;
+        const char * hybrid_dump_plan;
         bool hybrid_strict;
     };
 

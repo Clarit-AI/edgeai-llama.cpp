@@ -293,10 +293,6 @@ struct gpt_params {
     std::vector<llama_model_kv_override> kv_overrides;
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
     std::vector<std::pair<int,int>> offload_policy;
-    std::string hybrid_manifest         = "";
-    std::string hybrid_dump_plan        = "";
-    bool hybrid_strict                  = false;
-    bool hybrid_dry_run                 = false;
 
     bool lora_init_without_apply = false; // only load lora to memory, but do not apply it to ctx (user can manually apply lora later using llama_lora_adapter_apply)
     std::vector<llama_lora_adapter_info> lora_adapters; // lora adapter path with user defined scale
@@ -411,9 +407,9 @@ struct gpt_params {
     int reasoning_budget      = -1;
     bool prefill_assistant    = true;
     bool dry_run              = false;
-    bool hybrid_dry_run       = false; // resolve hybrid manifest and stop before tensor loading
-    bool hybrid_dump_plan     = false; // dump resolved hybrid tensor plan during model load
-    bool hybrid_strict        = false; // fail on unsupported hybrid manifest rules instead of falling back
+    bool        hybrid_dry_run   = false; // resolve hybrid manifest and stop before tensor loading
+    std::string hybrid_dump_plan = "";    // output path for resolved hybrid tensor plan (empty = disabled)
+    bool        hybrid_strict    = false; // fail on unsupported hybrid manifest rules instead of falling back
 
     std::vector<std::string> api_keys;
 

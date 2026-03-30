@@ -4925,7 +4925,7 @@ struct llama_model_params llama_model_default_params() {
         /*.hybrid_manifest             =*/ nullptr,
         /*.hybrid_profile              =*/ nullptr,
         /*.hybrid_dry_run              =*/ false,
-        /*.hybrid_dump_plan            =*/ false,
+        /*.hybrid_dump_plan            =*/ nullptr,
         /*.hybrid_strict               =*/ false,
     };
 
