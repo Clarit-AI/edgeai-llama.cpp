@@ -282,6 +282,8 @@ struct cmd_params {
     std::string hybrid_manifest;
     std::string hybrid_profile;
     bool hybrid_strict = false;
+    bool fit = false;
+    int  fit_margin = 0;
     output_formats output_format;
     output_formats output_format_stderr;
 };
@@ -331,6 +333,8 @@ static const cmd_params cmd_params_defaults = {
     /* hybrid_manifest      */ {},
     /* hybrid_profile       */ {},
     /* hybrid_strict        */ false,
+    /* fit                  */ false,
+    /* fit_margin           */ 0,
     /* output_format        */ MARKDOWN,
     /* output_format_stderr */ NONE,
 };
@@ -354,7 +358,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -ngl, --n-gpu-layers <n>            (default: %s)\n", join(cmd_params_defaults.n_gpu_layers, ",").c_str());
     printf("  --n-cpu-moe <n>                     (default: none)\n");
     printf("  -rpc, --rpc <rpc_servers>           (default: %s)\n", join(cmd_params_defaults.rpc_servers, ",").c_str());
-    printf("  -sm, --split-mode <none|row|layer>  (default: %s)\n", join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
+    printf("  -sm, --split-mode <none|layer|graph>(default: %s)\n", join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
     printf("  -mg, --main-gpu <i>                 (default: %s)\n", join(cmd_params_defaults.main_gpu, ",").c_str());
     printf("  -nkvo, --no-kv-offload <0|1>        (default: %s)\n", join(cmd_params_defaults.no_kv_offload, ",").c_str());
     printf("  -fa, --flash-attn <0|1>             (default: %s)\n", join(cmd_params_defaults.flash_attn, ",").c_str());
@@ -383,6 +387,8 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -no-fug, --no-fused-up-gate <0|1>   (default: %s)\n", cmd_params_defaults.no_fug? "1" : "0");
     printf("  -no-ooae, --no-offload-only-active-experts <0|1>   (default: %s)\n", cmd_params_defaults.no_ooae? "1" : "0");
     printf("  -sas, --scheduler-async <0|1>       (default: %s)\n", cmd_params_defaults.sas ? "1" : "0");
+    printf("  --fit <0|1>                         (default: %s)\n", cmd_params_defaults.fit ? "1" : "0");
+    printf("  --fit-margin N                      (default: %d)\n", cmd_params_defaults.fit_margin);
     printf("  --max-gpu <N>                       (default: %d)\n", cmd_params_defaults.max_gpu);
     printf("        --print-overrides <0|1>       (default: %s)\n", cmd_params_defaults.print_overrides ? "1" : "0");
     printf("\n");
@@ -825,6 +831,18 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 break;
             }
             params.sas = std::stoi(argv[i]);
+        } else if (arg == "--fit") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.fit = std::stoi(argv[i]);
+        } else if (arg == "--fit-margin") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.fit_margin = std::stoi(argv[i]);
         } else if (arg == "--max-gpu") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -943,6 +961,25 @@ enum test_kind_type {
     TEST_KIND_GP,
 };
 
+namespace hybrid_bench_env {
+static const bool manifest_enabled = !get_env_string("HYBRID_MANIFEST").empty();
+static const bool profile_enabled = !get_env_string("HYBRID_PROFILE").empty();
+static const bool strict_enabled = []() {
+    const std::string value = get_env_string("HYBRID_STRICT");
+    if (value.empty()) {
+        return false;
+    }
+    if (value == "0") {
+        return false;
+    }
+    std::string upper = value;
+    std::transform(upper.begin(), upper.end(), upper.begin(), [](unsigned char c) { return (char) std::toupper(c); });
+    return upper != "FALSE" && upper != "NO" && upper != "OFF";
+}();
+static const std::string manifest = get_env_string("HYBRID_MANIFEST");
+static const std::string profile = get_env_string("HYBRID_PROFILE");
+}
+
 struct cmd_params_instance {
     test_kind_type test_kind;
     std::string model;
@@ -978,6 +1015,8 @@ struct cmd_params_instance {
     bool rcache = false;
     bool sas = false;
     int max_gpu = 0;
+    bool fit = false;
+    int  fit_margin = 0;
     const llama_model_tensor_buft_override* buft_overrides;
 
     llama_model_params to_llama_mparams() const {
@@ -998,15 +1037,19 @@ struct cmd_params_instance {
         mparams.tensor_buft_overrides = buft_overrides;
         mparams.mla = mla_attn;
         mparams.max_gpu = max_gpu;
-        if (test::hybrid_manifest_enabled && !test::hybrid_manifest.empty()) {
-            mparams.hybrid_manifest = test::hybrid_manifest.c_str();
+        if (hybrid_bench_env::manifest_enabled && !hybrid_bench_env::manifest.empty()) {
+            mparams.hybrid_manifest = hybrid_bench_env::manifest.c_str();
         }
-        if (test::hybrid_profile_enabled && !test::hybrid_profile.empty()) {
-            mparams.hybrid_profile = test::hybrid_profile.c_str();
+        if (hybrid_bench_env::profile_enabled && !hybrid_bench_env::profile.empty()) {
+            mparams.hybrid_profile = hybrid_bench_env::profile.c_str();
         }
-        if (test::hybrid_strict_enabled) {
+        if (hybrid_bench_env::strict_enabled) {
             mparams.hybrid_strict = true;
         }
+        mparams.fit = fit;
+        mparams.fit_margin = fit_margin;
+        mparams.type_k = type_k;
+        mparams.type_v = type_v;
 
         return mparams;
     }
@@ -1023,6 +1066,8 @@ struct cmd_params_instance {
                muge == other.muge &&
                use_thp == other.use_thp &&
                sas == other.sas &&
+               fit == other.fit &&
+               fit_margin == other.fit_margin &&
                max_gpu == other.max_gpu &&
                tensor_split == other.tensor_split;
     }
@@ -1117,6 +1162,8 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .rcache       = */ params.rcache,
                 /* .sas          = */ params.sas,
                 /* .max_gpu      = */ params.max_gpu,
+                /* .fit          = */ params.fit,
+                /* .fit_margin   = */ params.fit_margin,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
@@ -1161,6 +1208,8 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .rcache       = */ params.rcache,
                 /* .sas          = */ params.sas,
                 /* .max_gpu      = */ params.max_gpu,
+                /* .fit          = */ params.fit,
+                /* .fit_margin   = */ params.fit_margin,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
@@ -1205,6 +1254,8 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .rcache       = */ params.rcache,
                 /* .sas          = */ params.sas,
                 /* .max_gpu      = */ params.max_gpu,
+                /* .fit          = */ params.fit,
+                /* .fit_margin   = */ params.fit_margin,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
@@ -1249,6 +1300,8 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .rcache       = */ params.rcache,
                 /* .sas          = */ params.sas,
                 /* .max_gpu      = */ params.max_gpu,
+                /* .fit          = */ params.fit,
+                /* .fit_margin   = */ params.fit_margin,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
@@ -1309,6 +1362,8 @@ struct test {
     bool rcache = false;
     bool sas = false;
     bool max_gpu = 0;
+    bool fit = false;
+    int  fit_margin = 0;
     std::string override_tensor;
     int n_prompt;
     int n_gen;
@@ -1351,6 +1406,8 @@ struct test {
         rcache = inst.rcache;
         sas = inst.sas;
         max_gpu = inst.max_gpu;
+        fit = inst.fit;
+        fit_margin = inst.fit_margin;
         no_fug = inst.no_fug;
         use_thp = inst.use_thp;
         no_ooae = inst.no_ooae;
@@ -1507,7 +1564,7 @@ struct test {
             tensor_split_str, std::to_string(use_mmap), std::to_string(embeddings),
             std::to_string(repack), std::to_string(mqkv), std::to_string(muge), std::to_string(fmoe), std::to_string(ger),
             std::to_string(no_fug), std::to_string(use_thp), std::to_string(no_ooae), std::to_string(rcache), std::to_string(sas),
-            std::to_string(max_gpu),
+            std::to_string(max_gpu), std::to_string(fit), std::to_string(fit_margin),
             cuda_params, override_tensor,
             hybrid_manifest_enabled ? hybrid_manifest : std::string(),
             hybrid_profile_enabled ? hybrid_profile : std::string(),
@@ -1531,7 +1588,7 @@ struct test {
             "n_gpu_layers", "split_mode",
             "main_gpu", "no_kv_offload", "flash_attn", "mla_attn", "attn_max_batch", "ser", "reuse",
             "tensor_split", "use_mmap", "embeddings", "repack", "mqkv", "muge", "fused_moe", "grouped_er",
-            "no_fused_up_gate", "use_thp", "no_ooae", "rcache", "sas", "max_gpu", "cuda_params", "override_tensor",
+            "no_fused_up_gate", "use_thp", "no_ooae", "rcache", "sas", "max_gpu", "fit", "fit_margin", "cuda_params", "override_tensor",
             "hybrid_manifest", "hybrid_profile", "hybrid_strict",
             "n_prompt", "n_gen", "test_time",
             "avg_ns", "stddev_ns",
@@ -1561,22 +1618,11 @@ const bool        test::blas         = !!ggml_cpu_has_blas();
 const bool        test::sycl         = !!ggml_cpu_has_sycl();
 const std::string test::cpu_info     = get_cpu_info();
 const std::string test::gpu_info     = get_gpu_info();
-const bool        test::hybrid_manifest_enabled = !get_env_string("HYBRID_MANIFEST").empty();
-const bool        test::hybrid_profile_enabled = !get_env_string("HYBRID_PROFILE").empty();
-const bool        test::hybrid_strict_enabled = []() {
-    const std::string value = get_env_string("HYBRID_STRICT");
-    if (value.empty()) {
-        return false;
-    }
-    if (value == "0") {
-        return false;
-    }
-    std::string upper = value;
-    std::transform(upper.begin(), upper.end(), upper.begin(), [](unsigned char c) { return (char) std::toupper(c); });
-    return upper != "FALSE" && upper != "NO" && upper != "OFF";
-}();
-const std::string test::hybrid_manifest = get_env_string("HYBRID_MANIFEST");
-const std::string test::hybrid_profile = get_env_string("HYBRID_PROFILE");
+const bool        test::hybrid_manifest_enabled = hybrid_bench_env::manifest_enabled;
+const bool        test::hybrid_profile_enabled = hybrid_bench_env::profile_enabled;
+const bool        test::hybrid_strict_enabled = hybrid_bench_env::strict_enabled;
+const std::string test::hybrid_manifest = hybrid_bench_env::manifest;
+const std::string test::hybrid_profile = hybrid_bench_env::profile;
 
 struct printer {
     virtual ~printer() {}

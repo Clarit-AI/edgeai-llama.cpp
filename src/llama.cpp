@@ -2356,8 +2356,10 @@ static bool llm_load_tensors(
         }
     }
 
+    bool has_manual_tensor_split = false;
     if (int device_count = model.devices.size(); device_count > 1) {
         bool all_zero = tensor_split == nullptr || std::all_of(tensor_split, tensor_split + device_count, [](float x) { return x == 0.0f; });
+        has_manual_tensor_split = tensor_split != nullptr && !all_zero;
         std::vector<float> splits(device_count);
         if (all_zero) {
             // default split, by free memory
@@ -2416,7 +2418,8 @@ static bool llm_load_tensors(
         }
         LLAMA_LOG_INFO("Memory required for model tensors + cache: %.f MiB\n", required_mem/(1024.*1024.));
         LLAMA_LOG_INFO("Memory available on all devices - compute: %.f MiB\n", available_mem/(1024.*1024.));
-        if (required_mem > available_mem) {
+        // Do not adjust the splits if the use has provided their own
+        if (required_mem > available_mem && !has_manual_tensor_split) {
             float sum = 0;
             for (int id = 0; id < device_count; ++id) {
                 device_mem[id] = device_mem[id] > max_compute ? device_mem[id] - max_compute : 0;
@@ -2511,22 +2514,24 @@ static bool llm_load_tensors(
                     LLAMA_LOG_ERROR("Not enough memory in device %d to offload the output layer\n", id);
                     throw std::runtime_error("Unable to auto-fit model");
                 }
-                device_mem[id] -= layer_sizes[id];
-                float sum = 0;
-                for (int id = 0; id < int(model.splits.size()); ++id) {
-                    sum += device_mem[id];
-                    model.splits[id] = sum;
-                }
-                if (sum > 0) {
-                    LLAMA_LOG_INFO("=== Adjusted device splits for split mode graph:\n");
-                    float last_split = 0;
+                device_mem[id] -= layer_sizes[n_layer];
+                if (!has_manual_tensor_split) {
+                    float sum = 0;
                     for (int id = 0; id < int(model.splits.size()); ++id) {
-                        model.splits[id] /= sum;
-                        LLAMA_LOG_INFO("Device %2d: %zu MiB -> split = %g\n", id, device_mem[id]/(1024*1024), model.splits[id] - last_split);
-                        last_split = model.splits[id];
+                        sum += device_mem[id];
+                        model.splits[id] = sum;
                     }
-                } else {
-                    throw std::runtime_error("Unable to auto-fit model");
+                    if (sum > 0) {
+                        LLAMA_LOG_INFO("=== Adjusted device splits for split mode graph:\n");
+                        float last_split = 0;
+                        for (int id = 0; id < int(model.splits.size()); ++id) {
+                            model.splits[id] /= sum;
+                            LLAMA_LOG_INFO("Device %2d: %zu MiB -> split = %g\n", id, device_mem[id]/(1024*1024), model.splits[id] - last_split);
+                            last_split = model.splits[id];
+                        }
+                    } else {
+                        throw std::runtime_error("Unable to auto-fit model");
+                    }
                 }
             } else {
                 for (int id = 0; id < device_count; ++id) {
@@ -2610,13 +2615,9 @@ static bool llm_load_tensors(
         for (int i = i_gpu_start; i < n_layer; ++i) {
             model.buft_layer[i] = hybrid_rknpu_load ? llama_default_buffer_type_cpu(true) :
                 llama_default_buffer_type_offload(model, model.default_layer_device[i]);
-            //int layer_gpu = std::upper_bound(model.splits.begin(), model.splits.begin() + device_count, float(i - i_gpu_start)/act_gpu_layers) - model.splits.begin();
-            //model.buft_layer[i] = llama_default_buffer_type_offload(model, model.devices[layer_gpu]);
         }
         // assign the output layer
         if (n_gpu_layers > n_layer) {
-            //int layer_gpu = std::upper_bound(model.splits.begin(), model.splits.begin() + device_count, float(act_gpu_layers - 1)/act_gpu_layers) - model.splits.begin();
-            //model.buft_output = llama_default_buffer_type_offload(model, model.devices[layer_gpu]);
             model.buft_output = hybrid_rknpu_load ? llama_default_buffer_type_cpu(true) :
                 llama_default_buffer_type_offload(model, model.default_layer_device[n_layer]);
         } else {
@@ -2633,7 +2634,6 @@ static bool llm_load_tensors(
             split_buft = hybrid_rknpu_load ? llama_default_buffer_type_cpu(true) :
                 llama_default_buffer_type_offload(model, model.devices[main_gpu]);
         }
-        //auto buft_layer = llama_default_buffer_type_offload(model, model.devices[main_gpu]);
         // assign the repeating layers
         for (int i = i_gpu_start; i < n_layer; ++i) {
             auto buft_layer = hybrid_rknpu_load ? llama_default_buffer_type_cpu(true) :
@@ -5095,6 +5095,7 @@ struct llama_context_params llama_context_default_params() {
         /*.thtesh_experts              =*/ 0.0f,
         /*.only_active_experts         =*/ false,
         /*.k_cache_hadamard            =*/ false,
+        /*.v_cache_hadamard            =*/ false,
         /*.split_mode_graph_scheduling =*/ false,
         // /*.split_mode_f16           =*/ true,
         /*.scheduler_async             =*/ false,
@@ -5432,8 +5433,13 @@ struct llama_context * llama_init_from_model(
     }
 
     if (params.k_cache_hadamard && !ggml_is_quantized(params.type_k)) {
-        LLAMA_LOG_WARN("%s: there is no point in Hadamard transforms with not quantized K-cache. Turning Hadamard off\n", __func__);
+        LLAMA_LOG_WARN("%s: there is no point in Hadamard transforms with not quantized K-cache. Turning K-cache Hadamard off\n", __func__);
         params.k_cache_hadamard = false;
+    }
+
+    if (params.v_cache_hadamard && !ggml_is_quantized(params.type_v)) {
+        LLAMA_LOG_WARN("%s: there is no point in Hadamard transforms with not quantized V-cache. Turning V-cache Hadamard off\n", __func__);
+        params.v_cache_hadamard = false;
     }
 
     llama_context * ctx = new llama_context(*model);
@@ -5470,6 +5476,7 @@ struct llama_context * llama_init_from_model(
     cparams.rope_cache       = params.rope_cache;
     cparams.graph_reuse      = params.graph_reuse;
     cparams.k_cache_hadamard = params.k_cache_hadamard;
+    cparams.v_cache_hadamard = params.v_cache_hadamard;
     cparams.split_mode_graph_scheduling = params.split_mode_graph_scheduling;
     //cparams.split_mode_f16   = params.split_mode_f16;
     cparams.scheduler_async  = params.scheduler_async;
@@ -5575,6 +5582,7 @@ struct llama_context * llama_init_from_model(
     LLAMA_LOG_INFO("%s: rope_cache    = %d\n",     __func__, cparams.rope_cache);
     LLAMA_LOG_INFO("%s: graph_reuse   = %d\n",     __func__, cparams.graph_reuse);
     LLAMA_LOG_INFO("%s: k_cache_hadam = %d\n",     __func__, cparams.k_cache_hadamard);
+    LLAMA_LOG_INFO("%s: v_cache_hadam = %d\n",     __func__, cparams.v_cache_hadamard);
     LLAMA_LOG_INFO("%s: split_mode_graph_scheduling = %d\n",   __func__, cparams.split_mode_graph_scheduling);
     //LLAMA_LOG_INFO("%s: split_mode_f16= %d\n",     __func__, cparams.split_mode_f16);
     LLAMA_LOG_INFO("%s: reduce_type   = %s\n",     __func__, ggml_type_name(cparams.reduce_type));

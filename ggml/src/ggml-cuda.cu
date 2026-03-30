@@ -522,7 +522,7 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
 #ifdef USE_CUDA_GRAPH
     // Let's leave this debug log in for now, so we have a trace in case
     // number of CUDA graphs goes crazy
-    printf("%s: have %d graphs\n", __func__, int(cuda_graphs.size()));
+    GGML_CUDA_LOG_INFO("%s: have %d graphs\n", __func__, int(cuda_graphs.size()));
 #endif
 
     std::unique_lock<std::mutex> lock(ggml_cuda_lock);
@@ -4617,7 +4617,8 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_ARGMAX:
             return true;
         case GGML_OP_HADAMARD:
-            return (op->ne[0] == 64 || op->ne[0] == 128 || op->ne[0] == 256) && op->type == GGML_TYPE_F32 && op->src[0]->type == GGML_TYPE_F32;
+            return (op->op_params[0] == 64 || op->op_params[0] == 128 || op->op_params[0] == 256) && op->ne[0] % op->op_params[0] == 0 &&
+                op->type == GGML_TYPE_F32 && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_DUP:
         case GGML_OP_REPEAT:
         case GGML_OP_CONCAT:
