@@ -197,7 +197,7 @@ Therefore, the "offloading" term is used when sending some processing to another
 
 As the GPUs (including their VRAM) are more powerful for LLM specific processing than CPU+RAM, the aim is to offload as much as possible to the GPU.
 
-Beside the improved quants (better quality and performance at the same size; usable low BPW), superior performance (faster PP and TG), ik_llama.cpp really shines at providing:
+Besides improved quants (better quality and performance at the same size; usable low BPW) and superior performance (faster PP and TG), ik_llama.cpp really shines at providing:
 - Detailed output log which e.g. includes layers and buffers sizes to support offload calculations.
 - A big collection of parameters to tweak offloading (what/where runs: processing, tensors, KV cache, operations, etc.).
 - Split mode `graph` when multiple GPUs are available, including mixes of different GPU types, various VRAM sizes.
@@ -257,7 +257,7 @@ llama_kv_cache_init:        CPU KV buffer size =    59.50 MiB
 llama_new_context_with_model: KV self size  =   59.50 MiB, K (q8_0):   29.75 MiB, V (q8_0):   29.75 MiB
 ```
 
-- To have access to more quant types, build with `GGML_IQK_FA_ALL_QUANTS=ON`, otherwise only `F16`, `Q8_0`, `Q6_0`, and, if the CPU provides native `BF16` support, `BF16` FA kernels will be included. After [PR 1549](https://github.com/ikawrakow/ik_llama.cpp/pull/1549), on **CPU** are enabled as well `Q4_1`, `IQ4_NL`, `Q4_0` by default to allow people experiment; use `GGML_IQK_FA_ALL_QUANTS=OFF` to reduce build time if those quants are not needed.
+- To have access to more quant types, build with `GGML_IQK_FA_ALL_QUANTS=ON`, otherwise only `F16`, `Q8_0`, `Q6_0`, and, if the CPU provides native `BF16` support, `BF16` FA kernels will be included. After [PR 1549](https://github.com/ikawrakow/ik_llama.cpp/pull/1549), `Q4_1`, `IQ4_NL`, and `Q4_0` are also enabled by default on **CPU** to let people experiment; use `GGML_IQK_FA_ALL_QUANTS=OFF` to reduce build time if those quants are not needed.
 - K-cache may need better quant than V-cache to reduce quality loss, they can be specified separately `--cache-type-k q8_0 --cache-type-v q8_0`
 - It needs FA `--flash-attn` flag, which is already turned on by default.
 - Fast quant type Q8_KV `-ctk q8_KV` [PR 208](https://github.com/ikawrakow/ik_llama.cpp/pull/208)
@@ -265,7 +265,7 @@ llama_new_context_with_model: KV self size  =   59.50 MiB, K (q8_0):   29.75 MiB
 
 3. Offload less to the GPU. Try to find a mix of parameters that better suits your system that default.
 
-- Try `--fit`. `ik_llama.cpp` automatically determine which tensors to offload to the GPUs based on the available VRAM.
+- Try `--fit`. `ik_llama.cpp` automatically determines which tensors to offload to the GPUs based on the available VRAM.
 
 - Use `--no-kv-offload` to keep KV cache on CPU. This is provided for flexibility, and practically not desired as reduces the prompt processing speed.
 
