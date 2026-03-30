@@ -70,8 +70,8 @@ Some often used terms.
 | `-ub, --ubatch-size N` | Physical maximum batch size | 512 | Safe to leave default. Similar to `--batch-size N` |
 | `--keep N` | Number of tokens to keep from the initial prompt | 0 | -1 = all |
 | `--chunks N` | Max number of chunks to process | -1 (all) |  |
-| `-dr, --dry-run` | Skip loading tensors in the files | - | Skips loading files, yet still report OOM error and print memory usage correctly, which is helpful for manually tuning of very large models. |
-| `--minilog` | Print important information | - | For `llama-server`, log request message for completions/response/anthropic and response. The prompt in the json format and the text response are saved in the log file and printed to the console. [PR 1477](https://github.com/ikawrakow/ik_llama.cpp/pull/1477) |
+| `-dr, --dry-run` | Skip loading tensors in the files | - | Skips loading files, yet still report OOM error and print memory usage correctly, which is helpful for manually tuning very large models. |
+| `--minilog` | Print important information | - | For `llama-server`, log request message for completions/response/anthropic and response. The prompt in the json format and the text response are saved in the log file and printed to the console. Prompts and responses may contain secrets or PII, so avoid enabling this in sensitive or production environments unless logs are protected and redacted. [PR 1477](https://github.com/ikawrakow/ik_llama.cpp/pull/1477) |
 | `-fa, --flash-attn` | Enables Flash Attention | on | auto / on / off Improves t/s and reduces memory usage. |
 | `--no-fa, --no-flash-attn` | Disable Flash Attention |  | Alternative parameter to turn of FA. See `--flash-attn` |
 | `-mla, --mla-use` | Enable MLA | 3 | 0 / 1 / 2 / 3 For DeepSeek models, and other recent models that are using MLA. [PR 188](https://github.com/ikawrakow/ik_llama.cpp/pull/188) [PR 205](https://github.com/ikawrakow/ik_llama.cpp/pull/205) [PR 235](https://github.com/ikawrakow/ik_llama.cpp/pull/235) [PR 243](https://github.com/ikawrakow/ik_llama.cpp/pull/243) [PR 252](https://github.com/ikawrakow/ik_llama.cpp/pull/252) [PR 253](https://github.com/ikawrakow/ik_llama.cpp/pull/253) [PR 273](https://github.com/ikawrakow/ik_llama.cpp/pull/273) [PR 386](https://github.com/ikawrakow/ik_llama.cpp/pull/386) [PR 497](https://github.com/ikawrakow/ik_llama.cpp/pull/497) [PR 943](https://github.com/ikawrakow/ik_llama.cpp/pull/943)|
@@ -197,7 +197,7 @@ Therefore, the "offloading" term is used when sending some processing to another
 
 As the GPUs (including their VRAM) are more powerful for LLM specific processing than CPU+RAM, the aim is to offload as much as possible to the GPU.
 
-Beside the improved quants (better quality and performance at the same size; usable low BPW), superior performance (faster PP ang TG), ik_llama.cpp really shines at providing:
+Beside the improved quants (better quality and performance at the same size; usable low BPW), superior performance (faster PP and TG), ik_llama.cpp really shines at providing:
 - Detailed output log which e.g. includes layers and buffers sizes to support offload calculations.
 - A big collection of parameters to tweak offloading (what/where runs: processing, tensors, KV cache, operations, etc.).
 - Split mode `graph` when multiple GPUs are available, including mixes of different GPU types, various VRAM sizes.
@@ -360,7 +360,7 @@ llama-sweep-bench -m /models/model.gguf -c 12288 -ub 512 -rtr -fa -ctk q8_0 -ctv
 | Parameter | Description | Default | Notes/Examples |
 | - | - | - | - |
 | `-nrep N, --n-repetitions N` | Define the number of repetitions used at zero context | - | [PR 1176](https://github.com/ikawrakow/ik_llama.cpp/pull/1176) |
-| `-n` | Specifies he number of TG tokens  | - | If not specified, it is set to u-batch/4 [PR 897](https://github.com/ikawrakow/ik_llama.cpp/pull/897) |
+| `-n` | Specifies the number of TG tokens  | - | If not specified, it is set to u-batch/4 [PR 897](https://github.com/ikawrakow/ik_llama.cpp/pull/897) |
 | `--minilog` | Reduce the verbosity | - | [PR 1468](https://github.com/ikawrakow/ik_llama.cpp/pull/1468) |
 
 ### llama-bench
