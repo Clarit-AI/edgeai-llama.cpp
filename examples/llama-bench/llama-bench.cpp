@@ -1163,7 +1163,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .sas          = */ params.sas,
                 /* .max_gpu      = */ params.max_gpu,
                 /* .fit          = */ params.fit,
-                /* .git_margin   = */ params.fit_margin,
+                /* .fit_margin   = */ params.fit_margin,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
@@ -1209,7 +1209,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .sas          = */ params.sas,
                 /* .max_gpu      = */ params.max_gpu,
                 /* .fit          = */ params.fit,
-                /* .git_margin   = */ params.fit_margin,
+                /* .fit_margin   = */ params.fit_margin,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
@@ -1255,7 +1255,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .sas          = */ params.sas,
                 /* .max_gpu      = */ params.max_gpu,
                 /* .fit          = */ params.fit,
-                /* .git_margin   = */ params.fit_margin,
+                /* .fit_margin   = */ params.fit_margin,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
@@ -1301,7 +1301,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .sas          = */ params.sas,
                 /* .max_gpu      = */ params.max_gpu,
                 /* .fit          = */ params.fit,
-                /* .git_margin   = */ params.fit_margin,
+                /* .fit_margin   = */ params.fit_margin,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
@@ -1564,7 +1564,7 @@ struct test {
             tensor_split_str, std::to_string(use_mmap), std::to_string(embeddings),
             std::to_string(repack), std::to_string(mqkv), std::to_string(muge), std::to_string(fmoe), std::to_string(ger),
             std::to_string(no_fug), std::to_string(use_thp), std::to_string(no_ooae), std::to_string(rcache), std::to_string(sas),
-            std::to_string(max_gpu),
+            std::to_string(max_gpu), std::to_string(fit), std::to_string(fit_margin),
             cuda_params, override_tensor,
             hybrid_manifest_enabled ? hybrid_manifest : std::string(),
             hybrid_profile_enabled ? hybrid_profile : std::string(),
@@ -1588,7 +1588,7 @@ struct test {
             "n_gpu_layers", "split_mode",
             "main_gpu", "no_kv_offload", "flash_attn", "mla_attn", "attn_max_batch", "ser", "reuse",
             "tensor_split", "use_mmap", "embeddings", "repack", "mqkv", "muge", "fused_moe", "grouped_er",
-            "no_fused_up_gate", "use_thp", "no_ooae", "rcache", "sas", "max_gpu", "cuda_params", "override_tensor",
+            "no_fused_up_gate", "use_thp", "no_ooae", "rcache", "sas", "max_gpu", "fit", "fit_margin", "cuda_params", "override_tensor",
             "hybrid_manifest", "hybrid_profile", "hybrid_strict",
             "n_prompt", "n_gen", "test_time",
             "avg_ns", "stddev_ns",

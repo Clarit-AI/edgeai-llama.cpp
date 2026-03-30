@@ -1748,7 +1748,7 @@ ggml_tensor * llm_build_context::llm_build_kv(
         cb(q_cur, "Qcur_hadamard", il);
         cb(k_cur, "Kcur_hadamard", il);
     }
-    if (cparams.v_cache_hadamard) {
+    if (cparams.v_cache_hadamard && cparams.flash_attn) {
         v_cur = ggml_hadamard(ctx, v_cur, hparams.n_embd_head_v);
     }
 
@@ -9341,6 +9341,11 @@ ggml_cgraph* llm_build_context::build_minimaxm2() {
 
                 cur = ggml_flash_attn_ext(ctx0, q, k, v, KQ_mask, 1.0f / sqrtf(float(n_embd_head)), hparams.f_max_alibi_bias, 0.0f);
                 cb(cur, "fa", il_id);
+
+                if (cparams.v_cache_hadamard) {
+                    cur = ggml_hadamard(ctx0, cur, hparams.n_embd_head_v);
+                    cb(cur, "fa_h", il_id);
+                }
 
                 cur = ggml_reshape_2d(ctx0, cur, wo->splits[id]->ne[0], n_tokens);
                 cb(cur, "fa_reshaped", il_id);

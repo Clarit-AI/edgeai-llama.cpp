@@ -2356,8 +2356,10 @@ static bool llm_load_tensors(
         }
     }
 
+    bool has_manual_tensor_split = false;
     if (int device_count = model.devices.size(); device_count > 1) {
         bool all_zero = tensor_split == nullptr || std::all_of(tensor_split, tensor_split + device_count, [](float x) { return x == 0.0f; });
+        has_manual_tensor_split = tensor_split != nullptr && !all_zero;
         std::vector<float> splits(device_count);
         if (all_zero) {
             // default split, by free memory
@@ -2417,7 +2419,7 @@ static bool llm_load_tensors(
         LLAMA_LOG_INFO("Memory required for model tensors + cache: %.f MiB\n", required_mem/(1024.*1024.));
         LLAMA_LOG_INFO("Memory available on all devices - compute: %.f MiB\n", available_mem/(1024.*1024.));
         // Do not adjust the splits if the use has provided their own
-        if (required_mem > available_mem && !tensor_split) {
+        if (required_mem > available_mem && !has_manual_tensor_split) {
             float sum = 0;
             for (int id = 0; id < device_count; ++id) {
                 device_mem[id] = device_mem[id] > max_compute ? device_mem[id] - max_compute : 0;
@@ -2513,7 +2515,7 @@ static bool llm_load_tensors(
                     throw std::runtime_error("Unable to auto-fit model");
                 }
                 device_mem[id] -= layer_sizes[id];
-                if (!tensor_split) {
+                if (!has_manual_tensor_split) {
                     float sum = 0;
                     for (int id = 0; id < int(model.splits.size()); ++id) {
                         sum += device_mem[id];
