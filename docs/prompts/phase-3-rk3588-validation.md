@@ -2,7 +2,7 @@
 
 You are working in the repository at:
 
-`<repository-root>`
+`<repository-root>/edgeai-llama.cpp`
 
 ## Context
 - PR #6 (phase-1 hybrid manifest routing) is merged.

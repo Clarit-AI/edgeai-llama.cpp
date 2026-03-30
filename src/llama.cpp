@@ -2671,7 +2671,7 @@ static bool llm_load_tensors(
         ml.use_mmap = false;
     }
 
-    if (hybrid_model_tensor_routing) {
+    if (hybrid_rknpu_load) {
         size_t cpu_bytes = 0;
         size_t rknpu_bytes = 0;
         size_t cpu_tensors = 0;

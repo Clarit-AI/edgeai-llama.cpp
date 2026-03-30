@@ -2,7 +2,7 @@
 
 You are running on or against a ROCK 5 / RK3588 environment for the repository:
 
-`<repository-root>`
+`<repository-root>/edgeai-llama.cpp`
 
 ## Goal
 Benchmark and compare CPU-only, legacy NPU, and manifest-driven hybrid execution on real hardware.

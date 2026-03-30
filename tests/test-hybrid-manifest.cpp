@@ -65,6 +65,7 @@ int main() {
 
         tc.assert_true("expected invalid strict-mode fixture to fail loudly", threw);
     });
+
     t.test("generated rule names sort numerically and set precedence", [&](testing & tc) {
         common_hybrid_manifest::manifest manifest;
         manifest.profile = "dense-balanced";
