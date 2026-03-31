@@ -3,7 +3,7 @@
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "ggml.h"
-//#include "ggml-backend.h"
+#include "ggml-backend.h"
 
 #ifdef GGML_USE_RKNPU2
 #  include "ggml-rknpu2/rknpu2-configuration.h"
@@ -47,8 +47,6 @@
 #endif
 
 #define LLAMA_API_INTERNAL
-
-ggml_backend_reg_t ggml_backend_reg_by_name(const char * name);
 
 namespace {
 
@@ -207,8 +205,13 @@ static ggml_backend_buffer_type_t get_rknpu_buffer_type() {
     if (!initialized) {
         initialized = true;
         if (ggml_backend_reg_t reg = ggml_backend_reg_by_name("RKNPU")) {
-            if (ggml_backend_dev_t dev = reg->iface.get_device(reg, 0)) {
-                buft = dev->iface.get_buffer_type(dev);
+            if (ggml_backend_reg_dev_count(reg) > 0) {
+                if (ggml_backend_dev_t dev = ggml_backend_reg_dev_get(reg, 0)) {
+                    if (ggml_backend_t backend = ggml_backend_init_from_dev(dev, "")) {
+                        buft = ggml_backend_get_default_buffer_type(backend);
+                        ggml_backend_free(backend);
+                    }
+                }
             }
         }
     }
