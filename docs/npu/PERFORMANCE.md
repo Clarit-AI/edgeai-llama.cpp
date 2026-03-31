@@ -141,6 +141,14 @@ The NPU uses IOVA (I/O Virtual Address) space for DMA transfers. This space is l
    RKNN_SPLIT_FACTOR=2 ./build/bin/llama-cli -m model.gguf -ngl 99
    ```
 
+2a. **Bound persistent RKNN cache growth**:
+   ```bash
+   RKNPU_B_CACHE_SIZE=32 RKNPU_CTX_CACHE_SIZE=32 \
+       ./build/bin/llama-cli -m model.gguf -ngl 99
+   ```
+
+   Use this when repeated or broader hybrid runs consume RKNN/IOMMU space over time even after the initial buffer sizing problem is already under control.
+
 3. **Quantize to smaller format**:
    - FP16 → INT8 saves ~50% memory
    - INT8 → Q4_0 saves ~75% memory
@@ -149,6 +157,10 @@ The NPU uses IOVA (I/O Virtual Address) space for DMA transfers. This space is l
    ```bash
    -c 512  # instead of default 2048
    ```
+
+`RKNN_SPLIT_FACTOR` and the cache limits solve different issues:
+- `RKNN_SPLIT_FACTOR` reduces the size of each routed allocation.
+- `RKNPU_B_CACHE_SIZE` and `RKNPU_CTX_CACHE_SIZE` bound the amount of persistent cached RKNN state across repeated or broader routed runs.
 
 Performance Profiling
 ---------------------

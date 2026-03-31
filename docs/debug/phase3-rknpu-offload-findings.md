@@ -1,5 +1,18 @@
 # Phase 3 RKNPU Offload Findings
 
+## 2026-03-30 Follow-up: KHA-180 Cache Bounding
+
+KHA-180 targets the next runtime issue surfaced by the allocator-fallback work:
+
+- `b_mem_handle_cache` and `matmul_ctx_cache` in [`ggml/src/ggml-rknpu2/ggml-rknpu2.cpp`](../../ggml/src/ggml-rknpu2/ggml-rknpu2.cpp) were unbounded
+- B-mem handle destruction depended on a raw matmul context handle, which was unsafe once matmul-context eviction became possible
+
+The fix path is to:
+
+- make B-mem handles retain the owning `shared_ptr<rknpu_matmul_context>`
+- bound the B-mem and matmul-context caches with LRU eviction
+- validate on RK3588 using a synced repo checkout over SSH so runtime tests are not performed against a stale device branch
+
 ## Scope
 
 This pass patched only [`src/llama.cpp`](../../src/llama.cpp) and preserved existing local edits in:

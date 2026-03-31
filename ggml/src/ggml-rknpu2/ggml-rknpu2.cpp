@@ -17,6 +17,7 @@
 #include <chrono>
 #include <atomic>
 #include <cassert>
+#include <cerrno>
 #include <cstring>
 #include <cstdlib>
 #include <mutex>
@@ -27,6 +28,7 @@
 #include <algorithm>
 #include <memory>
 #include <unordered_map>
+#include <list>
 #include <random>
 #include <limits>
 #include <stdexcept>
@@ -73,6 +75,55 @@ struct TupleHasher {
             (hash_combine(seed, args), ...);
         }, t);
         return seed;
+    }
+};
+
+template <typename Key, typename Value, typename Hasher>
+struct LruCache {
+    struct Entry {
+        Value value;
+        typename std::list<Key>::iterator lru_it;
+    };
+
+    size_t capacity = 64;
+    std::list<Key> lru_keys;
+    std::unordered_map<Key, Entry, Hasher> entries;
+
+    Value * find(const Key & key) {
+        auto it = entries.find(key);
+        if (it == entries.end()) {
+            return nullptr;
+        }
+
+        touch(it);
+        return &it->second.value;
+    }
+
+    void insert(const Key & key, Value value) {
+        auto it = entries.find(key);
+        if (it != entries.end()) {
+            it->second.value = std::move(value);
+            touch(it);
+            return;
+        }
+
+        lru_keys.push_front(key);
+        entries.emplace(key, Entry{std::move(value), lru_keys.begin()});
+        trim();
+    }
+
+private:
+    void touch(typename std::unordered_map<Key, Entry, Hasher>::iterator it) {
+        lru_keys.splice(lru_keys.begin(), lru_keys, it->second.lru_it);
+        it->second.lru_it = lru_keys.begin();
+    }
+
+    void trim() {
+        while (entries.size() > capacity && !lru_keys.empty()) {
+            const Key & key = lru_keys.back();
+            entries.erase(key);
+            lru_keys.pop_back();
+        }
     }
 };
 
@@ -158,16 +209,21 @@ struct rknpu_matmul_context {
 
 // Backend main context
 struct ggml_backend_rknpu_context {
+    using matmul_cache_key = std::tuple<int, int, int, int, int>;
+    using b_mem_cache_key = std::pair<ggml_backend_buffer_t, size_t>;
+
     std::string name;
     std::mutex mutex;
     rknn_core_mask core_mask = RKNN_NPU_CORE_0;  // Selected via RKNN_CORE_MASK env var
     int split_factor = 1;  // Selected via RKNN_SPLIT_FACTOR env var
+    size_t matmul_ctx_cache_size = 64;
+    size_t b_mem_handle_cache_size = 64;
 
     // RKNN matmul contexts cache
-    std::unordered_map<std::tuple<int, int, int, int, int>, std::shared_ptr<rknpu_matmul_context>, TupleHasher> matmul_ctx_cache;
+    LruCache<matmul_cache_key, std::shared_ptr<rknpu_matmul_context>, TupleHasher> matmul_ctx_cache;
 
     // B-matrices handle cache (from fd)
-    std::unordered_map<std::pair<ggml_backend_buffer_t, size_t>, std::shared_ptr<rknn_tensor_mem>, PairHasher> b_mem_handle_cache;
+    LruCache<b_mem_cache_key, std::shared_ptr<rknn_tensor_mem>, PairHasher> b_mem_handle_cache;
 
     // A- and C-matrices cache (from create_mem)
     std::unordered_map<std::tuple<int, int, int>, std::shared_ptr<rknn_tensor_mem>, TupleHasher> a_buffer_cache;
@@ -176,10 +232,10 @@ struct ggml_backend_rknpu_context {
     std::shared_ptr<rknpu_matmul_context> get_matmul_ctx(int M, int K, int N, int core_id, rknn_matmul_type type) {
         std::lock_guard<std::mutex> lock(mutex);
         auto key = std::make_tuple(M, K, N, core_id, (int)type);
-        auto it = matmul_ctx_cache.find(key);
-        if (it != matmul_ctx_cache.end()) {
-            return it->second;
+        if (auto * cached = matmul_ctx_cache.find(key)) {
+            return *cached;
         }
+
         auto ctx = std::make_shared<rknpu_matmul_context>(M, K, N, type);
         if (ctx->ctx == 0) {
             return nullptr;
@@ -212,8 +268,41 @@ struct ggml_backend_rknpu_context {
             rknn_matmul_set_core_mask(ctx->ctx, RKNN_NPU_CORE_0);
         }
 
-        matmul_ctx_cache[key] = ctx;
+        matmul_ctx_cache.insert(key, ctx);
         return ctx;
+    }
+
+    std::shared_ptr<rknn_tensor_mem> get_b_mem_handle(
+        ggml_backend_buffer_t src0_buffer,
+        ggml_backend_rknpu_buffer_context * src0_buf_ctx,
+        size_t total_offset,
+        size_t segment_size_bytes,
+        const std::shared_ptr<rknpu_matmul_context> & matmul_ctx) {
+        std::lock_guard<std::mutex> lock(mutex);
+        const auto key = std::make_pair(src0_buffer, total_offset);
+        if (auto * cached = b_mem_handle_cache.find(key)) {
+            return *cached;
+        }
+
+        rknn_tensor_mem * mem = rknn_create_mem_from_fd(
+            matmul_ctx->ctx,
+            src0_buf_ctx->dma_buf.fd,
+            src0_buf_ctx->dma_buf.virt_addr,
+            segment_size_bytes,
+            total_offset);
+        if (!mem) {
+            return nullptr;
+        }
+
+        auto deleter = [matmul_ctx](rknn_tensor_mem * m) {
+            if (m && matmul_ctx->ctx != 0) {
+                rknn_destroy_mem(matmul_ctx->ctx, m);
+            }
+        };
+
+        std::shared_ptr<rknn_tensor_mem> mem_shared(mem, deleter);
+        b_mem_handle_cache.insert(key, mem_shared);
+        return mem_shared;
     }
 };
 
@@ -284,6 +373,23 @@ static int parse_split_factor_env() {
     if (val < 1) val = 1;
     if (val > 16) val = 16;  // Cap at 16 to avoid excessive overhead
     return val;
+}
+
+static size_t parse_cache_size_env(const char * env_name, size_t default_value) {
+    const char * env = getenv(env_name);
+    if (!env) {
+        return default_value;
+    }
+
+    char * end = nullptr;
+    errno = 0;
+    long long val = strtoll(env, &end, 10);
+    if (errno != 0 || end == env || *end != '\0' || val <= 0) {
+        fprintf(stderr, "RKNPU2: Invalid %s '%s', clamping to 1\n", env_name, env);
+        return 1;
+    }
+
+    return (size_t) val;
 }
 
 
@@ -421,19 +527,13 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
                         size_t segment_size_bytes = matmul_ctx->io_attr.B.size;
                         size_t total_offset = src0_base_offset_in_dma + current_offset_in_tensor;
                         
-                        auto cache_key = std::make_pair(src0_buffer, total_offset);
-                        std::lock_guard<std::mutex> lock(backend_ctx->mutex);
-                        auto it = backend_ctx->b_mem_handle_cache.find(cache_key);
-
-                        if (it != backend_ctx->b_mem_handle_cache.end()) {
-                            mem_B_segments[idx] = it->second;
-                        } else {
-                            rknn_tensor_mem* mem = rknn_create_mem_from_fd(matmul_ctx->ctx, src0_buf_ctx->dma_buf.fd, src0_buf_ctx->dma_buf.virt_addr, segment_size_bytes, total_offset);
-                            if (!mem) return GGML_STATUS_FAILED;
-                            auto deleter = [ctx = matmul_ctx->ctx](rknn_tensor_mem* m) { if (m) rknn_destroy_mem(ctx, m); };
-                            mem_B_segments[idx] = std::shared_ptr<rknn_tensor_mem>(mem, deleter);
-                            backend_ctx->b_mem_handle_cache[cache_key] = mem_B_segments[idx];
-                        }
+                        mem_B_segments[idx] = backend_ctx->get_b_mem_handle(
+                            src0_buffer,
+                            src0_buf_ctx,
+                            total_offset,
+                            segment_size_bytes,
+                            matmul_ctx);
+                        if (!mem_B_segments[idx]) return GGML_STATUS_FAILED;
                         RKNN_CHECK(rknn_matmul_set_io_mem(matmul_ctx->ctx, mem_B_segments[idx].get(), &matmul_ctx->io_attr.B), "set_io_mem B segment");
                         break;
                     }
@@ -1021,7 +1121,7 @@ static bool ggml_backend_rknpu_device_supports_op(ggml_backend_dev_t dev, const 
             const struct ggml_tensor * src0 = op->src[0]; // Weights
             const struct ggml_tensor * src1 = op->src[1]; // Activations
             const auto & config = rknpu2_configuration::Rknpu2ConfigManager::get_instance().get_current_config();
-            const auto * manifest_route = nullptr;
+            const rknpu2_configuration::Rknpu2HybridRoute * manifest_route = nullptr;
             bool manifest_strict = false;
             bool manifest_mode = false;
             try {
@@ -1182,8 +1282,18 @@ static ggml_backend_t ggml_backend_rknpu_device_init_backend(ggml_backend_dev_t 
     ggml_backend_rknpu_context * ctx = new ggml_backend_rknpu_context();
     ctx->core_mask = parse_core_mask_env();
     ctx->split_factor = parse_split_factor_env();
+    ctx->b_mem_handle_cache_size = parse_cache_size_env("RKNPU_B_CACHE_SIZE", 64);
+    ctx->matmul_ctx_cache_size = parse_cache_size_env("RKNPU_CTX_CACHE_SIZE", 64);
+    ctx->b_mem_handle_cache.capacity = ctx->b_mem_handle_cache_size;
+    ctx->matmul_ctx_cache.capacity = ctx->matmul_ctx_cache_size;
     rknpu2_configuration::set_split_factor(ctx->split_factor);
-    fprintf(stderr, "RKNPU2: Using device '%s' with core_mask=%d, split_factor=%d\n", device_name, ctx->core_mask, ctx->split_factor);
+    fprintf(stderr,
+            "RKNPU2: Using device '%s' with core_mask=%d, split_factor=%d, b_cache_size=%zu, ctx_cache_size=%zu\n",
+            device_name,
+            ctx->core_mask,
+            ctx->split_factor,
+            ctx->b_mem_handle_cache_size,
+            ctx->matmul_ctx_cache_size);
     
     static const struct ggml_backend_i rknpu_backend_interface = {
         /* .get_name                = */ ggml_backend_rknpu_name,

@@ -133,6 +133,22 @@ RKNN_SPLIT_FACTOR=4 ./build/bin/llama-cli -m huge-model.gguf --n-gpu-layers 99
 
 **Pass criteria:** Large models load without "IOVA exhaustion" errors
 
+### Test 6b: Bounded RKNN Cache Growth
+
+```bash
+# Keep cache sizes conservative during repeated routed runs
+RKNPU_B_CACHE_SIZE=32 \
+RKNPU_CTX_CACHE_SIZE=32 \
+HYBRID_MANIFEST=/path/to/model.gguf.hybrid.json \
+HYBRID_PROFILE=balanced \
+HYBRID_STRICT=1 \
+    ./build/bin/llama-cli -m model.gguf -p "Cache validation" --n-gpu-layers 99 -n 64
+```
+
+Repeat the same command several times or run a small loop to confirm cache reuse stays bounded instead of growing without limit.
+
+**Pass criteria:** no crash, no stale-handle symptoms, and logs continue to show successful RKNN init / matmul execution across repeated runs.
+
 ---
 
 ## Benchmark Test
@@ -215,6 +231,25 @@ done
 ```
 
 **Pass criteria:** All 10 runs complete successfully
+
+For broader hybrid coverage, repeat Test 12 with:
+- `HYBRID_MANIFEST`
+- `HYBRID_PROFILE`
+- `HYBRID_STRICT=1`
+- conservative `RKNPU_B_CACHE_SIZE` and `RKNPU_CTX_CACHE_SIZE`
+
+This is the preferred regression check for cache-growth fixes because it exercises many routed tensors without relying on a single one-off run.
+
+---
+
+## RK3588 Sync-Then-SSH Flow
+
+When validating work that was implemented on a different machine, do not copy patches onto an older device checkout.
+
+1. Sync the RK3588 repo to the same starting commit or branch base used locally.
+2. Confirm remotes and branch ancestry match before building.
+3. SSH into the device and build/test against that synced checkout.
+4. If the device repo is significantly behind or has local drift, reconcile it first and only then continue runtime validation.
 
 ---
 
