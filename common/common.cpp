@@ -2622,7 +2622,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --hybrid-manifest FILE",  "path to a hybrid manifest sidecar or explicit manifest file" });
     options.push_back({ "*",           "       --hybrid-profile NAME",   "select a named hybrid manifest profile (default: manifest active_profile)" });
     options.push_back({ "*",           "       --hybrid-dry-run",        "resolve and validate a hybrid manifest without loading tensors" });
-    options.push_back({ "*",           "       --hybrid-dump-plan",      "print the resolved hybrid plan during model load" });
+    options.push_back({ "*",           "       --hybrid-dump-plan FILE", "write the resolved hybrid plan JSON to FILE during pre-load processing" });
     options.push_back({ "*",           "       --hybrid-strict",         "fail when hybrid manifest rules cannot be satisfied" });
     if (llama_supports_mlock()) {
         options.push_back({ "*",           "       --mlock",                "force system to keep model in RAM rather than swapping or compressing" });
@@ -3493,6 +3493,7 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.mtp             = params.has_mtp;
     mparams.flash_attn      = params.flash_attn;
     mparams.hybrid_dry_run  = params.hybrid_dry_run;
+    mparams.hybrid_dump_plan = params.hybrid_dump_plan.empty() ? nullptr : params.hybrid_dump_plan.c_str();
     mparams.hybrid_strict   = params.hybrid_strict;
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;
