@@ -383,6 +383,7 @@ struct gpt_params {
     std::vector<std::string> image; // path to image file(s)
     int image_min_tokens = -1;
     int image_max_tokens = -1;
+    std::string mtmd_kq_type = "f32";
 
     // embedding
     bool embedding         = false; // get only sentence embedding
