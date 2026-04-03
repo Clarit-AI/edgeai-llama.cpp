@@ -51,6 +51,7 @@ enum llama_vocab_pre_type {
     LLAMA_VOCAB_PRE_TYPE_MINIMAX_M2      = 40,
     LLAMA_VOCAB_PRE_TYPE_GRANITE_DOCLING = 41,
     LLAMA_VOCAB_PRE_TYPE_QWEN35          = 46,
+    LLAMA_VOCAB_PRE_TYPE_GEMMA4          = 47,
 };
 
 struct LLM_KV;
