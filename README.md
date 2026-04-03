@@ -1,4 +1,4 @@
-# edgeai_llama.cpp: llama.cpp fork with better CPU performance and Rockchip NPU Support.
+# Synapse: a llama.cpp fork with better CPU performance and Rockchip NPU Support.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
