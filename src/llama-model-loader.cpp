@@ -1233,6 +1233,14 @@ void llama_model_loader::build_hybrid_plan() {
         }
 
         if (default_policy_uses_npu(manifest.default_cpu_policy) && tensor_is_supported_npu_candidate(weight.tensor) && npu_buft) {
+            if (tensor_requires_cpu_visible_storage(tensor_name)) {
+                route.buft = ggml_backend_cpu_buffer_type();
+                route.backend_name = "cpu";
+                route.source = LLAMA_HYBRID_ROUTE_SOURCE_MANIFEST;
+                route.reason = "default rule requested NPU, but tensor must stay CPU-visible for ggml_fused_up_gate";
+                return true;
+            }
+
             const std::string pipeline = infer_npu_pipeline_for_type(weight.tensor->type);
             const std::pair<int, int> defaults = default_pipeline_alignment(pipeline);
             if (tensor_matches_rule_shape(weight.tensor, defaults.first, defaults.second, 0, 0)) {

@@ -21,6 +21,18 @@ using json = nlohmann::ordered_json;
 namespace {
 using rknpu2_configuration::Rknpu2HybridRule;
 
+bool parse_rule_int_field(const json & obj, const char * key, int & dst, std::string & error, const std::string & field_name) {
+    if (!obj.contains(key)) {
+        return true;
+    }
+    if (!obj[key].is_number_integer()) {
+        error = field_name + " must be an integer";
+        return false;
+    }
+    dst = obj[key].get<int>();
+    return true;
+}
+
 // Packing KxN FP16 (row-major: idx [k,n] -> k*N + n) into native RKNN for RK3588: (N/16, K/32, 16, 32)
 void pack_B_rk3588_fp16(
     uint8_t* dst_u8, const uint8_t* src_u8,
@@ -241,26 +253,45 @@ namespace {
             }
         }
 
-        if (rule_json.contains("shape")) {
-            const auto & shape = rule_json["shape"];
-            if (!shape.is_object()) {
-                error = "shape must be an object";
+        const json * shape = nullptr;
+        if (rule_json.contains("min_shape")) {
+            shape = &rule_json["min_shape"];
+        } else if (rule_json.contains("shape")) {
+            shape = &rule_json["shape"];
+        }
+
+        if (shape != nullptr) {
+            if (!shape->is_object()) {
+                error = "shape/min_shape must be an object";
                 return false;
             }
-            if (shape.contains("k_divisible_by")) {
-                if (!shape["k_divisible_by"].is_number_integer()) {
-                    error = "shape.k_divisible_by must be an integer";
-                    return false;
-                }
-                rule.k_divisible_by = shape["k_divisible_by"].get<int>();
+            if (!parse_rule_int_field(*shape, "k_divisible_by", rule.k_divisible_by, error, "shape/min_shape.k_divisible_by")) {
+                return false;
             }
-            if (shape.contains("n_divisible_by")) {
-                if (!shape["n_divisible_by"].is_number_integer()) {
-                    error = "shape.n_divisible_by must be an integer";
-                    return false;
-                }
-                rule.n_divisible_by = shape["n_divisible_by"].get<int>();
+            if (!parse_rule_int_field(*shape, "k_align", rule.k_divisible_by, error, "shape/min_shape.k_align")) {
+                return false;
             }
+            if (!parse_rule_int_field(*shape, "n_divisible_by", rule.n_divisible_by, error, "shape/min_shape.n_divisible_by")) {
+                return false;
+            }
+            if (!parse_rule_int_field(*shape, "n_align", rule.n_divisible_by, error, "shape/min_shape.n_align")) {
+                return false;
+            }
+            if (shape->contains("min_m") || shape->contains("min_n")) {
+                error = "shape/min_shape.min_m and min_n are not supported by the RKNPU backend manifest parser";
+                return false;
+            }
+        }
+
+        if (!parse_rule_int_field(rule_json, "k_align", rule.k_divisible_by, error, "rule.k_align")) {
+            return false;
+        }
+        if (!parse_rule_int_field(rule_json, "n_align", rule.n_divisible_by, error, "rule.n_align")) {
+            return false;
+        }
+        if (rule_json.contains("min_m") || rule_json.contains("min_n")) {
+            error = "rule.min_m and min_n are not supported by the RKNPU backend manifest parser";
+            return false;
         }
 
         if (rule_json.contains("source_quant_allow") || rule_json.contains("quant_allow")) {
