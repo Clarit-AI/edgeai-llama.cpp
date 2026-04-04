@@ -101,6 +101,8 @@ struct Rknpu2HybridRule {
     bool has_layer_range = false;
     int layer_begin = -1;
     int layer_end = -1;
+    int k_divisible_by = 0;
+    int n_divisible_by = 0;
     std::string role;
     std::string pipeline_name;
     std::vector<std::string> source_quant_allow;

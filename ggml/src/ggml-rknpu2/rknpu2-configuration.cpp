@@ -19,6 +19,19 @@ using json = nlohmann::ordered_json;
 // --- Anonymous namespace for chip-specific packing functions ---
 
 namespace {
+using rknpu2_configuration::Rknpu2HybridRule;
+
+bool parse_rule_int_field(const json & obj, const char * key, int & dst, std::string & error, const std::string & field_name) {
+    if (!obj.contains(key)) {
+        return true;
+    }
+    if (!obj[key].is_number_integer()) {
+        error = field_name + " must be an integer";
+        return false;
+    }
+    dst = obj[key].get<int>();
+    return true;
+}
 
 // Packing KxN FP16 (row-major: idx [k,n] -> k*N + n) into native RKNN for RK3588: (N/16, K/32, 16, 32)
 void pack_B_rk3588_fp16(
@@ -225,7 +238,8 @@ namespace {
             return false;
         }
 
-        const std::string backend = to_upper(rule_json.value("backend", std::string("NPU")));
+        const std::string target = to_upper(rule_json.value("target", std::string()));
+        const std::string backend = to_upper(rule_json.value("backend", target.empty() ? std::string("NPU") : target));
         rule.force_cpu = backend == "CPU" || backend == "CPU_ONLY";
         rule.required = rule_json.value("required", false);
         rule.role = rule_json.value("role", std::string());
@@ -239,15 +253,56 @@ namespace {
             }
         }
 
-        if (rule_json.contains("source_quant_allow")) {
-            const auto & arr = rule_json["source_quant_allow"];
+        const json * shape = nullptr;
+        if (rule_json.contains("min_shape")) {
+            shape = &rule_json["min_shape"];
+        } else if (rule_json.contains("shape")) {
+            shape = &rule_json["shape"];
+        }
+
+        if (shape != nullptr) {
+            if (!shape->is_object()) {
+                error = "shape/min_shape must be an object";
+                return false;
+            }
+            if (!parse_rule_int_field(*shape, "k_divisible_by", rule.k_divisible_by, error, "shape/min_shape.k_divisible_by")) {
+                return false;
+            }
+            if (!parse_rule_int_field(*shape, "k_align", rule.k_divisible_by, error, "shape/min_shape.k_align")) {
+                return false;
+            }
+            if (!parse_rule_int_field(*shape, "n_divisible_by", rule.n_divisible_by, error, "shape/min_shape.n_divisible_by")) {
+                return false;
+            }
+            if (!parse_rule_int_field(*shape, "n_align", rule.n_divisible_by, error, "shape/min_shape.n_align")) {
+                return false;
+            }
+            if (shape->contains("min_m") || shape->contains("min_n")) {
+                error = "shape/min_shape.min_m and min_n are not supported by the RKNPU backend manifest parser";
+                return false;
+            }
+        }
+
+        if (!parse_rule_int_field(rule_json, "k_align", rule.k_divisible_by, error, "rule.k_align")) {
+            return false;
+        }
+        if (!parse_rule_int_field(rule_json, "n_align", rule.n_divisible_by, error, "rule.n_align")) {
+            return false;
+        }
+        if (rule_json.contains("min_m") || rule_json.contains("min_n")) {
+            error = "rule.min_m and min_n are not supported by the RKNPU backend manifest parser";
+            return false;
+        }
+
+        if (rule_json.contains("source_quant_allow") || rule_json.contains("quant_allow")) {
+            const auto & arr = rule_json.contains("source_quant_allow") ? rule_json["source_quant_allow"] : rule_json["quant_allow"];
             if (!arr.is_array()) {
-                error = "source_quant_allow must be an array";
+                error = "source_quant_allow/quant_allow must be an array";
                 return false;
             }
             for (const auto & item : arr) {
                 if (!item.is_string()) {
-                    error = "source_quant_allow entries must be strings";
+                    error = "source_quant_allow/quant_allow entries must be strings";
                     return false;
                 }
                 rule.source_quant_allow.push_back(to_upper(item.get<std::string>()));
@@ -314,11 +369,15 @@ namespace {
         const json * rules_src = nullptr;
         if (profile_obj.contains("rules")) {
             rules_src = &profile_obj["rules"];
+        } else if (profile_obj.contains("routes")) {
+            rules_src = &profile_obj["routes"];
         } else if (manifest.contains("rules")) {
             rules_src = &manifest["rules"];
+        } else if (manifest.contains("routes")) {
+            rules_src = &manifest["routes"];
         }
         if (rules_src == nullptr || !rules_src->is_array()) {
-            error = "hybrid manifest does not contain a rules array";
+            error = "hybrid manifest does not contain a rules/routes array";
             return false;
         }
 
@@ -354,6 +413,13 @@ namespace {
 
         const std::string name = tensor->name != nullptr ? tensor->name : "";
         if (!std::regex_search(name, rule.match)) {
+            return false;
+        }
+
+        if (rule.k_divisible_by > 0 && tensor->ne[0] % rule.k_divisible_by != 0) {
+            return false;
+        }
+        if (rule.n_divisible_by > 0 && tensor->ne[1] % rule.n_divisible_by != 0) {
             return false;
         }
 
@@ -504,7 +570,7 @@ const Rknpu2HybridRoute* Rknpu2DeviceConfig::resolve_manifest_route(const struct
             route.fallback_reason = "manifest rule requests CPU";
             hybrid_route_cache.emplace(cache_key, route);
             if (hybrid_manifest_dump_plan) {
-                LLAMA_LOG_INFO("RKNPU2: manifest route %s -> CPU (%s, role=%s, layer=%d)\n",
+                LOG_INF("RKNPU2: manifest route %s -> CPU (%s, role=%s, layer=%d)\n",
                     name.c_str(), route.rule_name.c_str(), route.role.c_str(), route.layer_id);
             }
             return &hybrid_route_cache.find(cache_key)->second;
@@ -534,7 +600,7 @@ const Rknpu2HybridRoute* Rknpu2DeviceConfig::resolve_manifest_route(const struct
         route.pipeline = pipeline;
         hybrid_route_cache.emplace(cache_key, route);
         if (hybrid_manifest_dump_plan) {
-            LLAMA_LOG_INFO("RKNPU2: manifest route %s -> %s (%s, role=%s, layer=%d)\n",
+            LOG_INF("RKNPU2: manifest route %s -> %s (%s, role=%s, layer=%d)\n",
                 name.c_str(), route.pipeline_name.c_str(), route.rule_name.c_str(), route.role.c_str(), route.layer_id);
         }
         return &hybrid_route_cache.find(cache_key)->second;
@@ -548,7 +614,7 @@ void Rknpu2DeviceConfig::dump_hybrid_manifest_summary() const {
         return;
     }
 
-    LLAMA_LOG_INFO("RKNPU2: hybrid manifest path=%s profile=%s default_policy=%s rules=%zu strict=%d dump_plan=%d\n",
+    LOG_INF("RKNPU2: hybrid manifest path=%s profile=%s default_policy=%s rules=%zu strict=%d dump_plan=%d\n",
         hybrid_manifest_path.c_str(),
         hybrid_manifest_profile.c_str(),
         hybrid_manifest_default_policy.c_str(),
@@ -731,7 +797,7 @@ Rknpu2ConfigManager::Rknpu2ConfigManager() {
             if (rk3588_config.hybrid_manifest_strict) {
                 throw std::runtime_error(error);
             }
-            LLAMA_LOG_WARN("RKNPU2: ignoring hybrid manifest '%s': %s\n",
+            LOG_WRN("RKNPU2: ignoring hybrid manifest '%s': %s\n",
                 rk3588_config.hybrid_manifest_path.c_str(), error.c_str());
         }
     }
