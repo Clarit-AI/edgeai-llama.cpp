@@ -33,7 +33,9 @@ const std::set<std::string> & allowed_profiles() {
 const std::set<std::string> & known_pipelines() {
     static const std::set<std::string> pipelines = {
         "FP16_STANDARD",
+        "FP16_HADAMARD",
         "INT8_STANDARD",
+        "INT8_HADAMARD",
         "INT4_STANDARD",
         "INT4_HADAMARD",
     };

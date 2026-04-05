@@ -13,6 +13,23 @@
 
 #include <regex>
 
+extern "C" void ggml_backend_rknpu2_clear_runtime_caches(void);
+
+static bool rknpu_clear_caches_after_request() {
+    const char * value = getenv("RKNPU_CLEAR_CACHES_AFTER_REQUEST");
+    return value && value[0] != '\0' && strcmp(value, "0") != 0;
+}
+
+static bool rknpu_trace_server_progress() {
+    const char * value = getenv("RKNPU_TRACE_SERVER_PROGRESS");
+    return value && value[0] != '\0' && strcmp(value, "0") != 0;
+}
+
+static bool rknpu_trace_server_tokens() {
+    const char * value = getenv("RKNPU_TRACE_SERVER_TOKENS");
+    return value && value[0] != '\0' && strcmp(value, "0") != 0;
+}
+
 static void log_text(const gpt_params & params_base, const std::string & text) {
     if (params_base.minilog) {
         LOG_TEE("%s\n", text.c_str());
@@ -1579,6 +1596,15 @@ bool server_context::process_token(completion_token_output& result, server_slot&
         slot.stopped_limit = true;
         slot.has_next_token = false; // stop prediction
     }
+    if (rknpu_trace_server_tokens()) {
+        LLAMA_LOG_INFO(
+            "RKNPU_SERVER_TOKEN process_token id_slot=%d id_task=%d token=%d text='%s' "
+            "buffer_size=%zu n_buffer=%d has_next=%d stopped_eos=%d stopped_word=%d stopped_limit=%d task_null=%d\n",
+            slot.id, slot.id_task, result.tok, result.text_to_send.c_str(),
+            slot.token_buffer.size(), slot.n_buffer, slot.has_next_token ? 1 : 0,
+            slot.stopped_eos ? 1 : 0, slot.stopped_word ? 1 : 0, slot.stopped_limit ? 1 : 0,
+            slot.task == nullptr ? 1 : 0);
+    }
     log_text(params_base, "token:"+result.text_to_send);
     LOG_VERBOSE("next token", {
         {"id_slot",        slot.id},
@@ -1818,6 +1844,10 @@ void server_context::send_partial_response(server_slot& slot, completion_token_o
 }
 
 void server_context::send_final_response(server_slot& slot) {
+    if (rknpu_trace_server_progress()) {
+        LLAMA_LOG_INFO("RKNPU_SERVER send_final_response begin id_slot=%d id_task=%d n_past=%d n_decoded=%d\n",
+                slot.id, slot.id_task, slot.n_past, slot.n_decoded);
+    }
     auto res = std::make_unique<server_task_result_cmpl_final>();
     res->final_result = true;
     res->id = slot.id_task;
@@ -1875,6 +1905,10 @@ void server_context::send_final_response(server_slot& slot) {
     }
 
     queue_results.send(std::move(res));
+    if (rknpu_trace_server_progress()) {
+        LLAMA_LOG_INFO("RKNPU_SERVER send_final_response end id_slot=%d id_task=%d\n",
+                slot.id, slot.id_task);
+    }
 }
 
 void server_context::send_embedding(const server_slot& slot, const llama_batch& batch) {
@@ -1996,6 +2030,10 @@ void server_context::split_multiprompt_task(int id_multi, server_task& multiprom
 }
 
 void server_context::process_single_task(server_task&& task) {
+    if (rknpu_trace_server_progress()) {
+        LLAMA_LOG_INFO("RKNPU_SERVER process_single_task type=%d id=%d id_multi=%d\n",
+                (int) task.type, task.id, task.id_multi);
+    }
     switch (task.type) {
     case SERVER_TASK_TYPE_COMPLETION:
     case SERVER_TASK_TYPE_INFILL:
@@ -3389,18 +3427,39 @@ bool server_context::accept_special_token(const server_slot& slot, const  llama_
 }
 
 void server_context::release_slot_after_final_response(server_slot & slot) {
+    if (rknpu_trace_server_progress()) {
+        LLAMA_LOG_INFO("RKNPU_SERVER release_slot_after_final_response begin id_slot=%d id_task=%d\n",
+                slot.id, slot.id_task);
+    }
     slot.print_timings();
     if (params_base.do_checkpoint) {
         create_checkpoint(slot);
     }
+    if (rknpu_clear_caches_after_request()) {
+        ggml_backend_rknpu2_clear_runtime_caches();
+    }
     slot.release();
     slot.released = true;
     metrics.on_prediction(slot);
+    if (rknpu_trace_server_progress()) {
+        LLAMA_LOG_INFO("RKNPU_SERVER release_slot_after_final_response end id_slot=%d id_task=%d\n",
+                slot.id, slot.id_task);
+    }
 }
 
 void server_context::send_token_results(completion_token_outputs& results, server_slot& slot, int32_t n) {
     int count = 0;
     bool released = false;
+
+    if (rknpu_trace_server_tokens()) {
+        LLAMA_LOG_INFO(
+            "RKNPU_SERVER_TOKEN send_token_results begin id_slot=%d id_task=%d results=%zu n=%d "
+            "buffer_size=%zu has_next=%d stopped_eos=%d stopped_word=%d stopped_limit=%d task_null=%d\n",
+            slot.id, slot.id_task, results.size(), n, slot.token_buffer.size(),
+            slot.has_next_token ? 1 : 0, slot.stopped_eos ? 1 : 0,
+            slot.stopped_word ? 1 : 0, slot.stopped_limit ? 1 : 0,
+            slot.task == nullptr ? 1 : 0);
+    }
     
     int32_t start_pos = slot.n_past - (int32_t)slot.token_buffer.size() + 1;
 
@@ -3412,6 +3471,13 @@ void server_context::send_token_results(completion_token_outputs& results, serve
         
         count++;
         if (!has_next) {
+            if (rknpu_trace_server_tokens()) {
+                LLAMA_LOG_INFO(
+                    "RKNPU_SERVER_TOKEN send_token_results stop id_slot=%d id_task=%d count=%d "
+                    "stopped_eos=%d stopped_word=%d stopped_limit=%d\n",
+                    slot.id, slot.id_task, count, slot.stopped_eos ? 1 : 0,
+                    slot.stopped_word ? 1 : 0, slot.stopped_limit ? 1 : 0);
+            }
             if (slot.stopped_limit && !slot.stopped_eos && !slot.stopped_word) {
                 continue;
             }
@@ -3428,6 +3494,11 @@ void server_context::send_token_results(completion_token_outputs& results, serve
     }
 
     if (!released && slot.stopped_limit && !slot.stopped_eos && !slot.stopped_word) {
+        if (rknpu_trace_server_tokens()) {
+            LLAMA_LOG_INFO(
+                "RKNPU_SERVER_TOKEN send_token_results limit-release id_slot=%d id_task=%d\n",
+                slot.id, slot.id_task);
+        }
         slot.cache_tokens.push_back(slot.sampled);
         slot.n_past++;
         send_final_response(slot);
@@ -3437,6 +3508,15 @@ void server_context::send_token_results(completion_token_outputs& results, serve
     if (count > 0) {
         slot.sampled = results[results.size()-1].tok;
         results.erase(results.begin(), results.begin() + count);
+    }
+
+    if (rknpu_trace_server_tokens()) {
+        LLAMA_LOG_INFO(
+            "RKNPU_SERVER_TOKEN send_token_results end id_slot=%d id_task=%d count=%d released=%d "
+            "remaining=%zu buffer_size=%zu has_next=%d task_null=%d\n",
+            slot.id, slot.id_task, count, released ? 1 : 0, results.size(),
+            slot.token_buffer.size(), slot.has_next_token ? 1 : 0,
+            slot.task == nullptr ? 1 : 0);
     }
 
 }
@@ -3614,6 +3694,16 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
             }
         }
         // If slot.rewind_count_max == 0, allow_rewind remains true (Infinite)
+    }
+
+    if (rknpu_trace_server_tokens()) {
+        LLAMA_LOG_INFO(
+            "RKNPU_SERVER_TOKEN buffer_and_check id_slot=%d id_task=%d buffer_size=%zu n_buffer=%d "
+            "next_token=%d buffer_full=%d can_ban=%d ban_pos=%d allow_rewind=%d rewind_count=%d rewind_status=%d task_null=%d\n",
+            slot.id, slot.id_task, slot.token_buffer.size(), slot.n_buffer,
+            next_token ? 1 : 0, buffer_full ? 1 : 0, params_base.can_ban_phrases ? 1 : 0,
+            ban_pos, allow_rewind ? 1 : 0, slot.rewind_count, slot.rewind_status ? 1 : 0,
+            slot.task == nullptr ? 1 : 0);
     }
 
     if (ban_pos >= 0 && allow_rewind) {
