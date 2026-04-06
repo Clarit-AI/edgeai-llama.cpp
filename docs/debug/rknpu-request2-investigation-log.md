@@ -196,13 +196,22 @@ for cpu in /sys/devices/system/cpu/cpu*/cpuidle/state*/disable; do echo 1 | sudo
 
 ## Outstanding Issues
 
-### 1. Scale Bookkeeping for Broader Routes
+### 1. Scale Bookkeeping for Broader Routes — FIXED
 
 `dense-q8-late-ffn` (24 tensors) fails with `GGML_ASSERT(quantized_scale not found)`.
 
-Root cause: the per-row scale vector introduced in this commit may not be populated for all code paths. When more tensors are routed to RKNPU, some hit a path where the scale lookup fails. This was not visible with only 4 tensors because the failing tensors were not in the minimal set.
+**Root cause** (identified session 2): `graph_compute` processes ALL `MUL_MAT` ops where `resolve_op_support(src0)` returns a pipeline, regardless of whether `src0` is actually on an RKNPU buffer. When the ggml allocator can't fit a tensor on the RKNPU DMA buffer (it falls back to CPU), `resolve_op_support` still returns the pipeline (because the manifest matches by tensor name pattern, not buffer type). The code then casts `src0->buffer->context` (a CPU buffer context) to `ggml_backend_rknpu_buffer_context*`, causing UB and the scale-lookup assertion failure.
 
-Status: Not yet fixed. The scale bookkeeping logic in `quantize_tensor()` and the lookup in `ggml_backend_rknpu_graph_compute()` need to be reconciled.
+This was invisible with 4 tensors (all fit in RKNPU buffer) but manifests with 24 tensors (some overflow to CPU buffer).
+
+**Fix**: Added a 3-line buffer-type guard in `graph_compute` after `resolve_op_support` (line ~742):
+```cpp
+if (!src0->buffer || src0->buffer->buft != ggml_backend_rknpu_buffer_type()) {
+    continue;
+}
+```
+
+**Commit**: Pending validation on-device with `dense-q8-late-ffn` manifest.
 
 ### 2. RKNN fd-to-Handle Import for Large Buffers
 
@@ -304,3 +313,50 @@ RKNPU serialized B -> routed compute -> process_token -> budget check -> stopped
 1. Scale bookkeeping bug for broader manifests (blocks `dense-q8-late-ffn`)
 2. RKNN fd-to-handle import for large buffers (blocks `dense-balanced` at scale)
 3. Broader manifest validation matrix (Kimi-VL, MoE models)
+
+---
+
+## 2026-04-06 Session 3: Scale Bookkeeping Fix
+
+### Problem
+
+`dense-q8-late-ffn` (24 tensors to NPU, blocks 20-27 ffn_up/down/gate) crashes with:
+```
+GGML_ASSERT(quantized_scale not found)
+```
+
+This was invisible with 4-tensor manifests (all tensors fit in RKNPU DMA buffer) but manifests with 24 tensors.
+
+### Root Cause Analysis
+
+The `ggml_backend_rknpu_graph_compute()` function processes ALL `MUL_MAT` ops where `config.resolve_op_support(src0)` returns a pipeline. However, it does NOT check whether `src0` is actually stored on an RKNPU buffer.
+
+When the ggml allocator runs out of RKNPU DMA buffer space (limited by CMA), it silently falls back to placing overflow tensors on the CPU buffer. The `resolve_op_support()` function matches by tensor name pattern (from the manifest), so it still returns the RKNPU pipeline even for CPU-buffered tensors.
+
+The code then:
+1. Casts `src0->buffer->context` (a CPU buffer context) to `ggml_backend_rknpu_buffer_context*` — **undefined behavior**
+2. Looks up `quantized_tensor_scales[src0]` in the wrong context — **assertion failure**
+
+### Fix
+
+Added a 3-line buffer-type guard in `graph_compute` at line ~742, after `resolve_op_support`:
+
+```cpp
+// Guard: skip if src0 is not on an RKNPU buffer (e.g. fell back to CPU
+// because the RKNPU DMA buffer was full).  Without this check the code
+// below would cast a CPU-buffer context to an RKNPU-buffer context,
+// causing UB / assertion failures on the quantized-scale lookup.
+if (!src0->buffer || src0->buffer->buft != ggml_backend_rknpu_buffer_type()) {
+    continue;
+}
+```
+
+**File**: `ggml/src/ggml-rknpu2/ggml-rknpu2.cpp`
+
+**Build**: Clean compile verified.
+
+### Status
+
+- Fix committed to working tree
+- On-device validation with `dense-q8-late-ffn` pending (requires running server with the manifest)
+- This fix should unblock the broader manifest validation matrix

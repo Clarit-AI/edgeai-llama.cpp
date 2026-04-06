@@ -735,6 +735,14 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
         const auto* pipeline = config.resolve_op_support(src0);
         if (!pipeline) continue;
 
+        // Guard: skip if src0 is not on an RKNPU buffer (e.g. fell back to CPU
+        // because the RKNPU DMA buffer was full).  Without this check the code
+        // below would cast a CPU-buffer context to an RKNPU-buffer context,
+        // causing UB / assertion failures on the quantized-scale lookup.
+        if (!src0->buffer || src0->buffer->buft != ggml_backend_rknpu_buffer_type()) {
+            continue;
+        }
+
         const bool is_hadamard = (pipeline->use_hadamard);
         const int K_op = is_hadamard ? rknpu2_calibration::next_power_of_two(K) : K;
 
