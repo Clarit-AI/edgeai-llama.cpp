@@ -360,3 +360,49 @@ if (!src0->buffer || src0->buffer->buft != ggml_backend_rknpu_buffer_type()) {
 - Fix committed to working tree
 - On-device validation with `dense-q8-late-ffn` pending (requires running server with the manifest)
 - This fix should unblock the broader manifest validation matrix
+
+---
+
+## Session 4: Forward Declaration Fix + Broader Manifest Validation
+
+**Date**: 2026-04-07
+**Commits**: `104a03f0` (forward declaration), `5b0c63ce` (buffer-type guard)
+
+### Forward Declaration Fix
+
+The buffer-type guard introduced in Session 3 references `ggml_backend_rknpu_buffer_type()` at line 742, but that function is defined as `static` at line 1686 — 944 lines *after* the call site. The non-RKNPU build (`build/`) didn't compile `ggml-rknpu2.cpp`, so the issue was invisible. The RKNPU build (`build-rknpu/`) failed with:
+
+```
+error: 'ggml_backend_rknpu_buffer_type' was not declared in this scope
+```
+
+**Fix**: Added a forward declaration before `graph_compute()`:
+```cpp
+static ggml_backend_buffer_type_t ggml_backend_rknpu_buffer_type(void);
+```
+
+### Validation Results
+
+| Manifest | NPU Tensors | NPU MiB | Result |
+|----------|-------------|---------|--------|
+| `dense-q8-late-ffn` | 8 (blk.20-27 ffn_down) | ~192 | **10/10 PASS** |
+| `dense-q8-tail-down-plus-ffn-down-full` | 32 (all ffn_down) | ~720 | **SEGFAULT** |
+
+### 32-Tensor Segfault Analysis
+
+The full manifest (`dense-q8-tail-down-plus-ffn-down-full`) routes ALL 32 `ffn_down` tensors (blk.0-31) to `INT8_STANDARD`. Model loading succeeds — 720 MiB DMA buffer allocated, all 32 scales populated. The warmup pass (M=1-2) completes all 32 tensors.
+
+The crash occurs during the **first inference request** (M=4+), processing `blk.30.ffn_down.weight` — the 31st tensor. The 32nd tensor (`blk.31`) is never reached. Diagnostic logging confirmed:
+
+1. The scale lookup succeeds for all 31 tensors (scales_map_size=32)
+2. The crash happens AFTER the scale lookup, likely in `rknn_matmul_run()` or C-buffer allocation
+3. With M=4, each tensor needs M × N_segment × sizeof(float) bytes for C-buffer
+
+**Hypothesis**: NPU DMA memory exhaustion for C-matrix buffers. With 32 tensors × M=4 rows × N=2560 × 4 bytes = ~1.25 GiB of C-buffers alone — exceeding available DMA space. The warmup pass (M=1) only needs ~320 MiB, which fits.
+
+### Remaining Work
+
+- [ ] Verify C-buffer memory exhaustion hypothesis
+- [ ] Test with intermediate manifest sizes (16, 24 tensors)
+- [ ] Consider C-buffer streaming or reuse for large manifests
+- [ ] Commit diagnostic changes (revert noisy fprintf, keep useful key-dump)

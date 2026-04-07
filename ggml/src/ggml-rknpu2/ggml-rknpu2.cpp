@@ -746,6 +746,10 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
             continue;
         }
 
+        // Debug: log every op that enters the NPU path (disable for production)
+        // fprintf(stderr, "RKNPU_OP tensor=%s M=%d K=%d N=%d pipeline=%s\n",
+        //         src0->name, M, K, N, pipeline ? pipeline->pipeline_name.c_str() : "null");
+
         const bool is_hadamard = (pipeline->use_hadamard);
         const int K_op = is_hadamard ? rknpu2_calibration::next_power_of_two(K) : K;
 
@@ -950,7 +954,13 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
                 {
                     std::lock_guard<std::mutex> lock(src0_buf_ctx->mutex);
                     auto it = src0_buf_ctx->quantized_tensor_scales.find(src0);
-                    GGML_ASSERT(it != src0_buf_ctx->quantized_tensor_scales.end() && "Quantized scale not found");
+                    if (it == src0_buf_ctx->quantized_tensor_scales.end()) {
+                        fprintf(stderr, "RKNPU_SCALE_NOT_FOUND tensor=%s — dumping keys:\n", src0->name);
+                        for (const auto& [k, v] : src0_buf_ctx->quantized_tensor_scales) {
+                            fprintf(stderr, "  key=%p name=%s scales_len=%zu\n", (void*)k, k->name, v.size());
+                        }
+                        GGML_ASSERT(false && "Quantized scale not found");
+                    }
                     scales_B = it->second;
                 }
             }
