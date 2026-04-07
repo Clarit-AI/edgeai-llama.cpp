@@ -398,11 +398,92 @@ The crash occurs during the **first inference request** (M=4+), processing `blk.
 2. The crash happens AFTER the scale lookup, likely in `rknn_matmul_run()` or C-buffer allocation
 3. With M=4, each tensor needs M × N_segment × sizeof(float) bytes for C-buffer
 
-**Hypothesis**: NPU DMA memory exhaustion for C-matrix buffers. With 32 tensors × M=4 rows × N=2560 × 4 bytes = ~1.25 GiB of C-buffers alone — exceeding available DMA space. The warmup pass (M=1) only needs ~320 MiB, which fits.
+**Hypothesis (DISPROVED)**: ~~NPU DMA memory exhaustion for C-matrix buffers.~~ C-buffer total was only ~1 MiB — far below CMA limits.
 
 ### Remaining Work
 
-- [ ] Verify C-buffer memory exhaustion hypothesis
-- [ ] Test with intermediate manifest sizes (16, 24 tensors)
-- [ ] Consider C-buffer streaming or reuse for large manifests
-- [ ] Commit diagnostic changes (revert noisy fprintf, keep useful key-dump)
+- [x] Verify C-buffer DMA exhaustion hypothesis — DISPROVED (only 1 MiB C-buffers)
+- [x] Test with intermediate manifest sizes (12, 16 tensors) — all crash at blk.31
+- [x] Identify true root cause (see Session 5)
+- [x] Implement fix for scheduler fallback crash (see Session 5)
+
+---
+
+## Session 5: Original Data Backup Fix — Broader Manifest Validation
+
+**Date**: 2026-04-07
+**Commits**: pending
+
+### DMA Exhaustion Hypothesis — Disproved
+
+Added `RKNPU_TRACE_DMA=1` diagnostic logging for A/C buffer allocations and per-op tracking. Results showed:
+- C-buffer total across all ops: **only ~1 MiB** — far below CMA limits
+- A-buffer per op: ~36 KiB × 3 segments — negligible
+- The kernel log showed `rknpu_gem_get_pages: dma map fail` errors, but these were secondary
+
+### True Root Cause: CPU Backend Reads NPU-Packed Weights
+
+Through systematic testing with different manifest sizes:
+
+| Manifest | Tensors | Result | Last Tensor Processed |
+|----------|---------|--------|----------------------|
+| blk.20-27 (8) | 8 | **PASS** | All 8 |
+| blk.24-31 (8) | 8 | **SEGFAULT** | blk.30 (7 of 8) |
+| blk.20-31 (12) | 12 | **SEGFAULT** | blk.30 (11 of 12) |
+| blk.16-31 (16) | 16 | **SEGFAULT** | blk.30 (15 of 16) |
+| blk.0-31 (32) | 32 | **SEGFAULT** | blk.30 (31 of 32) |
+
+**Key insight**: The crash is tensor-specific (always `blk.31`), not count-dependent. blk.20-27 works but blk.24-31 doesn't — same tensor count, different crash behavior.
+
+**Investigation trail**:
+1. Added node-level tracing in `graph_compute` — discovered the crash happens AFTER `graph_end` for the last successful tensor, NOT inside RKNPU code
+2. Added `supports_op` check logging — confirmed `supports_op` returns true for blk.31
+3. Discovered the MUL_MAT node for blk.31 at M=4 is **never presented to graph_compute** — the scheduler routes it to the CPU backend instead
+
+**Root cause chain**:
+1. `set_tensor` repacks Q8_0 weight data to NPU-native INT8 packed format in the RKNPU DMA buffer
+2. The ggml allocator places the MUL_MAT output tensor (`dst`) on the CPU compute buffer (the RKNPU compute buffer is only 23 MiB, insufficient for all layers)
+3. The scheduler's `ggml_backend_sched_backend_id_from_cur` checks the **dst buffer first** (line 1665 of ggml-backend.cpp) — since dst is on CPU, it returns the CPU backend immediately
+4. The CPU backend tries to read `src0->data` (the weight tensor) expecting Q8_0 format, but finds NPU-packed INT8 data → **segfault**
+
+### Fix: Original Data Backup
+
+When `set_tensor` repacks weight data for NPU, save the original data in `original_tensor_data` (per-buffer-context map). When `get_tensor` is called (by the CPU backend reading weights), return the original data instead of the NPU-packed version.
+
+**Files changed**:
+- `ggml/src/ggml-rknpu2/ggml-rknpu2.cpp`:
+  - Added `original_tensor_data` field to `ggml_backend_rknpu_buffer_context`
+  - Modified `ggml_backend_rknpu_buffer_set_tensor` to backup original data before repacking
+  - Modified `ggml_backend_rknpu_buffer_get_tensor` to return original data when available
+
+**Memory cost**: Each backed-up tensor uses `ggml_nbytes()` (original Q8_0 size) in heap memory, in addition to the packed NPU size in the DMA buffer. For 32 tensors of ffn_down (~720 MiB original), this adds ~720 MiB of heap memory.
+
+### Validation Results (After Fix)
+
+| Manifest | NPU Tensors | Result |
+|----------|-------------|--------|
+| `dense-q8-late-ffn` (blk.20-27) | 8 | **PASS** (baseline, unchanged) |
+| `dense-q8-ffn-down-24-31` | 8 | **PASS** (was SEGFAULT, now fixed) |
+| `dense-q8-ffn-down-16` (blk.16-31) | 16 | **PASS** (was SEGFAULT, now fixed) |
+| `dense-q8-tail-down-plus-ffn-down-full` (blk.0-31) | 32 | **PASS** (was SEGFAULT, now fixed) |
+
+All manifests pass with HTTP 200 on both request 1 and request 2.
+
+### Throughput Notes
+
+32-tensor manifest shows significantly lower throughput (~0.7 t/s generation) because most MUL_MAT ops fall back to CPU — the RKNPU compute buffer (23 MiB) can't hold the output tensors for all 32 layers, so the scheduler routes most ops to CPU. Only the ops whose output fits in the RKNPU compute buffer run on NPU. The fix prevents crashes but doesn't improve throughput for large manifests.
+
+### New Diagnostic Tool
+
+`RKNPU_TRACE_DMA=1` env var now provides:
+- Per-op A-buffer and C-buffer allocation sizes
+- Per-op matmul context creation with M/K/N dimensions
+- Serial execution step-by-step trace (run_begin, run_end, write_back_done)
+- Per-graph summary with total C-buffer usage and cache entries
+
+### Updated Next Steps
+
+1. Investigate why the RKNPU compute buffer is only 23 MiB — can it be increased?
+2. Explore on-the-fly B-matrix packing in `graph_compute` instead of pre-packing in `set_tensor` (would eliminate the backup memory cost)
+3. Run 10-request validation on all fixed manifests
+4. Commit and prepare PR
