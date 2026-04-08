@@ -535,14 +535,14 @@ Instead of pre-packing in `set_tensor` and backing up original data:
 ### Memory Layout Change
 
 **Before** (with backup):
-```
+```text
 DMA buffer:  [packed_INT8][packed_INT8]...  (720 MiB)
 Heap:        [original_Q8_0][original_Q8_0]...  (720 MiB)
 Total:       1440 MiB
 ```
 
 **After** (OTF packing):
-```
+```text
 DMA buffer:  [original_Q8_0][original_Q8_0]...  (~760 MiB, +6%)
 RKNN memory: [packed_seg]... (only for NPU-active tensors)
 Total:       ~760 MiB DMA + per-tensor RKNN segments
