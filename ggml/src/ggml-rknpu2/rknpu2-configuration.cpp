@@ -44,30 +44,39 @@ void pack_B_rk3588_fp16(
     GGML_ASSERT(K % 32 == 0 && N_total > 0 && K > 0);
     GGML_ASSERT(n_offset % 16 == 0 && n_segment % 16 == 0 && n_offset + n_segment <= N_total);
 
-    const size_t s0 = (size_t)(K / 32) * 16 * 32;
-    const size_t s1 = 16 * 32;
-    const size_t s2 = 32;
+    const int k_segment_limit = 8192;
+    size_t packed_base = 0;
 
-    for (int i = 0; i < n_segment / 16; ++i) {
-        for (int j = 0; j < K / 32; ++j) {
-            const size_t dst_block = (size_t) i * s0 + (size_t) j * s1;
-            for (int ii = 0; ii < 16; ++ii) {
-                const size_t n_global = (size_t)n_offset + (size_t)i * 16 + (size_t)ii;
-                
-                const uint16_t * src_ptr = src + n_global * K + j * 32;
-                uint16_t * dst_ptr = dst + dst_block + ii * s2;
+    for (int k_base = 0; k_base < K; k_base += k_segment_limit) {
+        const int k_segment = std::min(k_segment_limit, K - k_base);
+        const size_t s0 = (size_t)(k_segment / 32) * 16 * 32;
+        const size_t s1 = 16 * 32;
+        const size_t s2 = 32;
+        uint16_t * dst_segment = dst + packed_base;
 
-                uint16x8_t d0 = vld1q_u16(src_ptr + 0);
-                uint16x8_t d1 = vld1q_u16(src_ptr + 8);
-                uint16x8_t d2 = vld1q_u16(src_ptr + 16);
-                uint16x8_t d3 = vld1q_u16(src_ptr + 24);
+        for (int i = 0; i < n_segment / 16; ++i) {
+            for (int j = 0; j < k_segment / 32; ++j) {
+                const size_t dst_block = (size_t) i * s0 + (size_t) j * s1;
+                for (int ii = 0; ii < 16; ++ii) {
+                    const size_t n_global = (size_t)n_offset + (size_t)i * 16 + (size_t)ii;
 
-                vst1q_u16(dst_ptr + 0, d0);
-                vst1q_u16(dst_ptr + 8, d1);
-                vst1q_u16(dst_ptr + 16, d2);
-                vst1q_u16(dst_ptr + 24, d3);
+                    const uint16_t * src_ptr = src + n_global * K + k_base + j * 32;
+                    uint16_t * dst_ptr = dst_segment + dst_block + ii * s2;
+
+                    uint16x8_t d0 = vld1q_u16(src_ptr + 0);
+                    uint16x8_t d1 = vld1q_u16(src_ptr + 8);
+                    uint16x8_t d2 = vld1q_u16(src_ptr + 16);
+                    uint16x8_t d3 = vld1q_u16(src_ptr + 24);
+
+                    vst1q_u16(dst_ptr + 0, d0);
+                    vst1q_u16(dst_ptr + 8, d1);
+                    vst1q_u16(dst_ptr + 16, d2);
+                    vst1q_u16(dst_ptr + 24, d3);
+                }
             }
         }
+
+        packed_base += (size_t) n_segment * k_segment;
     }
 }
 
@@ -82,26 +91,35 @@ void pack_B_rk3588_int8(
     GGML_ASSERT(K % 32 == 0 && N_total > 0 && K > 0);
     GGML_ASSERT(n_offset % 32 == 0 && n_segment % 32 == 0 && n_offset + n_segment <= N_total);
 
-    const size_t s0 = (size_t)(K / 32) * 32 * 32;
-    const size_t s1 = 32 * 32;
-    const size_t s2 = 32;
+    const int k_segment_limit = 8192;
+    size_t packed_base = 0;
 
-    for (int i = 0; i < n_segment / 32; ++i) {
-        for (int j = 0; j < K / 32; ++j) {
-            const size_t dst_block = (size_t) i * s0 + (size_t) j * s1;
-            for (int ii = 0; ii < 32; ++ii) {
-                const size_t n_global = (size_t)n_offset + (size_t)i * 32 + (size_t)ii;
+    for (int k_base = 0; k_base < K; k_base += k_segment_limit) {
+        const int k_segment = std::min(k_segment_limit, K - k_base);
+        const size_t s0 = (size_t)(k_segment / 32) * 32 * 32;
+        const size_t s1 = 32 * 32;
+        const size_t s2 = 32;
+        int8_t * dst_segment = dst + packed_base;
 
-                const int8_t* src_ptr = src + n_global * K + j * 32;
-                int8_t* dst_ptr = dst + dst_block + ii * s2;
+        for (int i = 0; i < n_segment / 32; ++i) {
+            for (int j = 0; j < k_segment / 32; ++j) {
+                const size_t dst_block = (size_t) i * s0 + (size_t) j * s1;
+                for (int ii = 0; ii < 32; ++ii) {
+                    const size_t n_global = (size_t)n_offset + (size_t)i * 32 + (size_t)ii;
 
-                int8x16_t d0 = vld1q_s8(src_ptr);
-                int8x16_t d1 = vld1q_s8(src_ptr + 16);
+                    const int8_t* src_ptr = src + n_global * K + k_base + j * 32;
+                    int8_t* dst_ptr = dst_segment + dst_block + ii * s2;
 
-                vst1q_s8(dst_ptr, d0);
-                vst1q_s8(dst_ptr + 16, d1);
+                    int8x16_t d0 = vld1q_s8(src_ptr);
+                    int8x16_t d1 = vld1q_s8(src_ptr + 16);
+
+                    vst1q_s8(dst_ptr, d0);
+                    vst1q_s8(dst_ptr + 16, d1);
+                }
             }
         }
+
+        packed_base += (size_t) n_segment * k_segment;
     }
 }
 

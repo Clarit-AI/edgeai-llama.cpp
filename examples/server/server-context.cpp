@@ -3401,7 +3401,7 @@ void server_context::release_slot_after_final_response(server_slot & slot) {
 void server_context::send_token_results(completion_token_outputs& results, server_slot& slot, int32_t n) {
     int count = 0;
     bool released = false;
-    
+
     int32_t start_pos = slot.n_past - (int32_t)slot.token_buffer.size() + 1;
 
     for (auto& it : results) {

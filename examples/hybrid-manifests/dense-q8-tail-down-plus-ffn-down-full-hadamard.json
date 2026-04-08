@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "profile": "dense-balanced",
+  "strict": true,
+  "npu_pattern": ["FP16_STANDARD", "INT8_HADAMARD"],
+  "routes": [
+    {
+      "name": "cpu-experts",
+      "match": "\\.ffn_(up|down|gate|gate_up)_exps\\.weight$",
+      "target": "cpu"
+    },
+    {
+      "name": "dense-all-ffn-down-q8",
+      "match": "^blk\\.[0-9]+\\.ffn_down\\.",
+      "target": "default",
+      "pipeline": "INT8_HADAMARD",
+      "quant_allow": ["f16", "q8_0"],
+      "shape": {
+        "k_divisible_by": 32,
+        "n_divisible_by": 32
+      }
+    }
+  ]
+}

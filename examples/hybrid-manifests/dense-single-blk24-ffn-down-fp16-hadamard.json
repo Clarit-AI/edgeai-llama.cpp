@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "profile": "dense-balanced",
+  "strict": true,
+  "npu_pattern": ["FP16_STANDARD", "FP16_HADAMARD"],
+  "routes": [
+    {
+      "name": "cpu-experts",
+      "match": "\\.ffn_(up|down|gate|gate_up)_exps\\.weight$",
+      "target": "cpu"
+    },
+    {
+      "name": "single-blk24-ffn-down-fp16-hadamard",
+      "match": "^blk\\.24\\.ffn_down\\.",
+      "target": "default",
+      "pipeline": "FP16_HADAMARD",
+      "quant_allow": ["f16", "q8_0"],
+      "shape": {
+        "k_divisible_by": 32,
+        "n_divisible_by": 32
+      }
+    }
+  ]
+}
