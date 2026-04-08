@@ -258,15 +258,16 @@ endif()
 
 set (GGML_SOURCES_IQK iqk/iqk_quantize.cpp iqk/iqk_cpu_ops.cpp)
 set (GGML_HEADERS_IQK iqk/iqk_config.h iqk/iqk_cpu_ops.h)
-if (GGML_IQK_MUL_MAT)
+set(GGML_DISABLE_IQK_MUL_MAT_APPLE_ARM64 OFF)
+if (APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$")
+    set(GGML_DISABLE_IQK_MUL_MAT_APPLE_ARM64 ON)
+endif()
+
+if (GGML_IQK_MUL_MAT AND NOT GGML_DISABLE_IQK_MUL_MAT_APPLE_ARM64)
     message(STATUS "Using optimized iqk matrix multiplications")
     add_compile_definitions(GGML_USE_IQK_MULMAT)
     set(GGML_SOURCES_IQK_MM iqk/iqk_mul_mat.cpp
                             iqk/iqk_flash_attn.cpp
-                            iqk/fa/iqk_fa_576_512.cpp
-                            iqk/fa/iqk_fa_512_512.cpp
-                            iqk/fa/iqk_fa_320_256.cpp
-                            iqk/fa/iqk_fa_192_128.cpp
                             iqk/fa/iqk_fa_192_192.cpp
                             iqk/fa/iqk_fa_256_256.cpp
                             iqk/fa/iqk_fa_128_128.cpp
@@ -279,6 +280,12 @@ if (GGML_IQK_MUL_MAT)
                             iqk/iqk_gemm_iqk_quants.cpp
                             iqk/iqk_gemm_1bit.cpp
                             iqk/iqk_gemm_legacy_quants.cpp)
+
+    set(GGML_SOURCES_IQK_MM_FULLFP16
+                            iqk/fa/iqk_fa_576_512.cpp
+                            iqk/fa/iqk_fa_512_512.cpp
+                            iqk/fa/iqk_fa_320_256.cpp
+                            iqk/fa/iqk_fa_192_128.cpp)
     set(GGML_HEADERS_IQK_MM iqk/iqk_mul_mat.h
                             iqk/iqk_flash_impl.h
                             iqk/fa/iqk_fa_templates.h
@@ -289,6 +296,19 @@ if (GGML_IQK_MUL_MAT)
                             iqk/iqk_gemm_iqk_quants.h
                             iqk/iqk_gemm_1bit.h
                             iqk/iqk_gemm_legacy_quants.h)
+
+    set(GGML_ENABLE_IQK_MM_FULLFP16 ON)
+    if (APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$")
+        # Keep Gemma on CPU/GPU without forcing the Apple arm64 toolchain through
+        # the largest IQK FA kernels, which are the current build blockers here.
+        set(GGML_ENABLE_IQK_MM_FULLFP16 OFF)
+        message(STATUS "Disabling large IQK FA kernels on Apple arm64 to keep newer models off the fragile accelerated path")
+    endif()
+
+    if (GGML_ENABLE_IQK_MM_FULLFP16)
+        list(APPEND GGML_SOURCES_IQK_MM ${GGML_SOURCES_IQK_MM_FULLFP16})
+    endif()
+
     if (GGML_IQK_FLASH_ATTENTION)
         message(STATUS "Enabling IQK Flash Attention kernels")
         add_compile_definitions(GGML_IQK_FLASH_ATTENTION)
@@ -299,6 +319,8 @@ if (GGML_IQK_MUL_MAT)
     else()
         message(STATUS "Disabling IQK Flash Attention kernels")
     endif()
+elseif (GGML_IQK_MUL_MAT)
+    message(STATUS "Disabling optimized iqk matrix multiplications on Apple arm64 to keep large models off the fragile path")
 endif()
 
 if (GGML_CUDA)

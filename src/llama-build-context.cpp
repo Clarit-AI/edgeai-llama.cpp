@@ -9634,7 +9634,7 @@ ggml_cgraph* llm_build_context::build_minimaxm2() {
                 cb(cur, "fa", il_id);
 
                 if (cparams.v_cache_hadamard) {
-                    cur = ggml_hadamard(ctx0, cur, hparams.n_embd_head_v);
+                    cur = ggml_hadamard(ctx0, cur, hparams.n_embd_head_v(il));
                     cb(cur, "fa_h", il_id);
                 }
 

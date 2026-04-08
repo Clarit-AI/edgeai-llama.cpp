@@ -16957,6 +16957,7 @@ static int ggml_compute_forward_mul_mat(
 
     if (src1->type != vec_dot_type && dst->type == GGML_TYPE_F32) {
         const size_t row_size = ggml_row_size(vec_dot_type, ne10);
+#if GGML_USE_IQK_MULMAT
         if (iqk_mul_mat_4d(ne01, ne11, ne00,
                     ne02, ne03, ne12, ne13, nb02, nb03, row_size*ne11, row_size*ne11*ne12,
                     nb2/sizeof(float), nb3/sizeof(float),
@@ -16983,6 +16984,7 @@ static int ggml_compute_forward_mul_mat(
             }
         }
         return node_n;
+#endif
     }
 
     if (ith == 0) {
@@ -22621,12 +22623,14 @@ static void ggml_compute_forward_delta_net_f32(
 
     int repeat_type = dst->op_params[0];
 
+#if GGML_USE_IQK_MULMAT
     if (iqk_fused_delta_net(head_dim, n_heads, gqa_ratio, repeat_type, n_tokens, n_seqs,
                 src2->nb[1]/sizeof(float), src2->nb[2]/sizeof(float), src2->nb[3]/sizeof(float),
                 q_data, k_data, v_data, g_data, beta_data, state_in,
                 out_data, state_out, ith, nth)) {
         return;
     }
+#endif
 
     // TODO: fix this in case we need to fall back to it.
     const int64_t total_heads = n_heads * n_seqs;
@@ -24229,11 +24233,19 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             } break;
         case GGML_OP_MOE_FUSED_UP_GATE:
             {
+#if GGML_USE_IQK_MULMAT
                 ggml_compute_forward_mul_mat_id_up_gate(params, tensor);
+#else
+                GGML_ABORT("GGML_OP_MOE_FUSED_UP_GATE requires GGML_USE_IQK_MULMAT");
+#endif
             } break;
         case GGML_OP_FUSED_UP_GATE:
             {
+#if GGML_USE_IQK_MULMAT
                 ggml_compute_forward_mul_mat_up_gate(params, tensor);
+#else
+                GGML_ABORT("GGML_OP_FUSED_UP_GATE requires GGML_USE_IQK_MULMAT");
+#endif
             } break;
         case GGML_OP_OUT_PROD:
             {
@@ -24323,10 +24335,14 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
                     cgraph->nodes[i+0]->type == GGML_TYPE_F32  &&
                     cgraph->nodes[i+4]->type == GGML_TYPE_F32  &&
                     cgraph->nodes[i+3]->type == GGML_TYPE_I32) {
+#if GGML_USE_IQK_MULMAT
                     iqk_topk_moe(cgraph->nodes[i]->ne[0], cgraph->nodes[i+4]->ne[1], cgraph->nodes[i]->ne[1],
                             (const float *)cgraph->nodes[i]->data, (float *)cgraph->nodes[i+4]->data, (int32_t *)cgraph->nodes[i+3]->data,
                             params->ith, params->nth);
                     i += 4;
+#else
+                    ggml_compute_forward_soft_max(params, tensor);
+#endif
                 } else {
                     ggml_compute_forward_soft_max(params, tensor);
                 }
