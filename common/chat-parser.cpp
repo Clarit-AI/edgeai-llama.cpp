@@ -1512,6 +1512,7 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
 common_chat_msg common_chat_parse(const std::string & input, bool is_partial, const common_chat_syntax & syntax) {
     if (syntax.format == COMMON_CHAT_FORMAT_PEG_SIMPLE ||
         syntax.format == COMMON_CHAT_FORMAT_PEG_NATIVE ||
+        syntax.format == COMMON_CHAT_FORMAT_PEG_GEMMA4 ||
         syntax.format == COMMON_CHAT_FORMAT_PEG_CONSTRUCTED) {
         return common_chat_peg_parse(syntax.parser, input, is_partial, syntax);
     }
@@ -1551,6 +1552,9 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena & parser, const std
 
     if (syntax.format == COMMON_CHAT_FORMAT_PEG_NATIVE) {
         auto mapper = common_chat_peg_native_mapper(msg);
+        mapper.from_ast(ctx.ast, result);
+    } else if (syntax.format == COMMON_CHAT_FORMAT_PEG_GEMMA4) {
+        auto mapper = common_chat_peg_gemma4_mapper(msg);
         mapper.from_ast(ctx.ast, result);
     } else if (syntax.format == COMMON_CHAT_FORMAT_PEG_CONSTRUCTED) {
         auto mapper = common_chat_peg_constructed_mapper(msg);

@@ -774,6 +774,7 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_MIROTHINKER: return "MiroThinker";
         case COMMON_CHAT_FORMAT_PEG_SIMPLE: return "peg-simple";
         case COMMON_CHAT_FORMAT_PEG_NATIVE: return "peg-native";
+        case COMMON_CHAT_FORMAT_PEG_GEMMA4: return "peg-gemma4";
         case COMMON_CHAT_FORMAT_PEG_CONSTRUCTED: return "peg-constructed";
         default:
             throw std::runtime_error("Unknown chat format");
@@ -1249,6 +1250,123 @@ static common_chat_params common_chat_params_init_ministral_3(const common_chat_
 
         data.grammar_triggers = {
             {COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "[TOOL_CALLS]"}
+        };
+    }
+
+    return data;
+}
+
+static common_chat_params common_chat_params_init_gemma4(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    common_chat_params data;
+
+    data.prompt = apply(tmpl, inputs);
+    data.format = COMMON_CHAT_FORMAT_PEG_GEMMA4;
+    data.preserved_tokens = {
+        "<|channel>",
+        "<channel|>",
+        "<|tool_call>",
+        "<tool_call|>",
+        "<|turn>",
+    };
+
+    auto has_tools = inputs.tools.is_array() && !inputs.tools.empty();
+    auto has_response_format = !inputs.json_schema.is_null() && inputs.json_schema.is_object();
+    auto include_grammar = has_response_format || (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE);
+    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+
+    auto parser = build_chat_peg_native_parser([&](common_chat_peg_native_builder & p) {
+        auto start = p.literal("<|channel>");
+
+        if (extract_reasoning) {
+            p.rule("thought", p.literal("<|channel>thought\n") + p.reasoning(p.until("<channel|>")) + p.literal("<channel|>"));
+        } else {
+            p.rule("thought", p.content(p.literal("<|channel>thought\n") + p.until("<channel|>") + p.literal("<channel|>")));
+        }
+
+        auto thought = (p.peek(p.literal("<|channel>")) + p.ref("thought")) | p.negate(p.literal("<|channel>"));
+
+        if (has_response_format) {
+            auto response_format = p.literal("```json")
+                << p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema))
+                << p.literal("```");
+            return start + p.optional(thought) + response_format;
+        }
+
+        if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
+            p.rule("gemma4-string-content", p.until("<|\"|>"));
+            p.rule("gemma4-string", p.literal("<|\"|>") + p.ref("gemma4-string-content") + p.literal("<|\"|>"));
+            p.rule("gemma4-bool", p.json_bool());
+            p.rule("gemma4-null", p.json_null());
+            p.rule("gemma4-number", p.json_number());
+            p.rule("gemma4-dict-key", p.rule("gemma4-dict-key-name", p.until(":")) + p.literal(":"));
+            p.rule("gemma4-dict-kv", p.ref("gemma4-dict-key") + p.space() + p.ref("gemma4-value"));
+            p.rule("gemma4-dict", [&]() {
+                auto ws = p.space();
+                auto member = p.ref("gemma4-dict-kv");
+                auto members = p.sequence({member, p.zero_or_more(p.sequence({p.literal(","), ws, member}))});
+                return p.sequence({
+                    p.literal("{"), ws,
+                    p.choice({p.literal("}"), p.sequence({members, ws, p.literal("}")})})
+                });
+            });
+            p.rule("gemma4-array", [&]() {
+                auto ws = p.space();
+                auto value = p.ref("gemma4-value");
+                auto elements = p.sequence({value, p.zero_or_more(p.sequence({p.literal(","), ws, value}))});
+                return p.sequence({
+                    p.literal("["), ws,
+                    p.choice({p.literal("]"), p.sequence({elements, ws, p.literal("]")})})
+                });
+            });
+            p.rule("gemma4-value", [&]() {
+                return p.choice({
+                    p.ref("gemma4-string"), p.ref("gemma4-dict"), p.ref("gemma4-array"),
+                    p.ref("gemma4-number"), p.ref("gemma4-bool"), p.ref("gemma4-null")
+                });
+            });
+
+            auto tool_choice = p.choice();
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function = tool.at("function");
+                std::string name = function.at("name");
+
+                tool_choice |= p.rule("tool-" + name, p.tool(p.sequence({
+                    p.tool_open(p.tool_name(p.literal(name)) + p.peek(p.literal("{"))),
+                    p.tool_args(p.ref("gemma4-dict")),
+                })));
+            });
+
+            auto tool_call = p.trigger_rule("tool-call", p.repeat(
+                "<|tool_call>call:" + tool_choice + "<tool_call|>",
+                inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0,
+                inputs.parallel_tool_calls ? -1 : 1
+            ));
+
+            auto content = p.rule("content", p.content(p.until_one_of({"<|channel>", "<|tool_call>"})));
+            auto message = p.rule("message", thought + content);
+            return start + p.zero_or_more(message) + tool_call;
+        }
+
+        auto content = p.rule("content", p.content(p.until("<|channel>")));
+        auto message = p.rule("message", thought + content);
+        return start + p.one_or_more(message);
+    });
+
+    data.parser = parser.save();
+
+    if (include_grammar) {
+        data.grammar_lazy = !(has_response_format || (has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED));
+        data.grammar = build_grammar([&](const common_grammar_builder & builder) {
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function = tool.at("function");
+                auto schema = function.at("parameters");
+                builder.resolve_refs(schema);
+            });
+            parser.build_grammar(builder, data.grammar_lazy);
+        });
+
+        data.grammar_triggers = {
+            { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<|tool_call>" },
         };
     }
 
@@ -3016,6 +3134,133 @@ static void system_message_not_supported(json & messages) {
     }
 }
 
+// Gemma4 uses a custom tool_responses field instead of role:tool messages.
+// This folds assistant(tool_calls) -> tool -> assistant(content) into one assistant turn.
+struct gemma4_model_turn_builder {
+    json & messages;
+    size_t pos;
+    json tool_calls = json::array();
+    json tool_responses = json::array();
+    json content;
+    json reasoning_content;
+
+    gemma4_model_turn_builder(json & msgs, size_t pos) : messages(msgs), pos(pos) {}
+
+    void collect() {
+        auto & msg = messages[pos];
+        if (msg.contains("reasoning_content") && msg.at("reasoning_content").is_string()) {
+            reasoning_content = msg.at("reasoning_content");
+        }
+        for (auto & tc : msg.at("tool_calls")) {
+            tool_calls.push_back(tc);
+        }
+        pos++;
+
+        while (pos < messages.size() && messages[pos].value("role", "") == "tool") {
+            collect_result(messages[pos]);
+            pos++;
+        }
+
+        if (pos < messages.size() && messages[pos].value("role", "") == "assistant") {
+            auto & next = messages[pos];
+            if (!has_tool_calls(next) && has_content(next)) {
+                content = next.at("content");
+                pos++;
+            }
+        }
+    }
+
+    void collect_result(const json & curr) {
+        json response;
+        if (curr.contains("content")) {
+            const auto & current_content = curr.at("content");
+            if (current_content.is_string()) {
+                try {
+                    response = json::parse(current_content.get<std::string>());
+                } catch (...) {
+                    response = current_content;
+                }
+            } else {
+                response = current_content;
+            }
+        }
+
+        std::string name;
+        size_t idx = tool_responses.size();
+        if (idx < tool_calls.size()) {
+            auto & tc = tool_calls[idx];
+            if (tc.contains("function")) {
+                name = tc.at("function").value("name", "");
+            }
+        }
+
+        if (name.empty()) {
+            name = curr.value("tool_call_id", "");
+        }
+
+        tool_responses.push_back({{"name", name}, {"response", response}});
+    }
+
+    json build() {
+        collect();
+
+        json msg = {
+            {"role", "assistant"},
+            {"tool_calls", tool_calls},
+        };
+        if (!tool_responses.empty()) {
+            msg["tool_responses"] = tool_responses;
+        }
+        if (!content.is_null()) {
+            msg["content"] = content;
+        }
+        if (!reasoning_content.is_null()) {
+            msg["reasoning_content"] = reasoning_content;
+        }
+        return msg;
+    }
+
+    static bool has_content(const json & msg) {
+        if (!msg.contains("content") || msg.at("content").is_null()) {
+            return false;
+        }
+        const auto & content = msg.at("content");
+        if (content.is_string() && !content.get<std::string>().empty()) {
+            return true;
+        }
+        if (content.is_array() && !content.empty()) {
+            return true;
+        }
+        return false;
+    }
+
+    static bool has_tool_calls(const json & msg) {
+        return msg.contains("tool_calls") && msg.at("tool_calls").is_array() && !msg.at("tool_calls").empty();
+    }
+};
+
+static void convert_tool_responses_gemma4(json & messages) {
+    json result = json::array();
+    size_t i = 0;
+
+    while (i < messages.size()) {
+        auto & msg = messages[i];
+
+        if (msg.value("role", "") != "assistant" || !msg.contains("tool_calls") ||
+            !msg.at("tool_calls").is_array() || msg.at("tool_calls").empty()) {
+            result.push_back(msg);
+            i++;
+            continue;
+        }
+
+        gemma4_model_turn_builder builder(messages, i);
+        result.push_back(builder.build());
+        i = builder.pos;
+    }
+
+    messages = result;
+}
+
 static void func_args_not_string(json & messages) {
     GGML_ASSERT(messages.is_array());
     for (auto & message : messages) {
@@ -3225,6 +3470,12 @@ static common_chat_params common_chat_templates_apply_jinja(
         src.find("</tool_name>") != std::string::npos &&
         src.find("</arguments>") != std::string::npos) {
         return common_chat_params_init_mirothinker(tmpl, params);
+    }
+
+    // Gemma4 format detection
+    if (src.find("'<|tool_call>call:'") != std::string::npos) {
+        workaround::convert_tool_responses_gemma4(params.messages);
+        return common_chat_params_init_gemma4(tmpl, params);
     }
 
     // Hermes 2/3 Pro, Qwen 2.5 Instruct (w/ tools)

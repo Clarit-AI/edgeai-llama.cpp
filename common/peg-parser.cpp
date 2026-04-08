@@ -1353,9 +1353,25 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
                 return gbnf_excluding_pattern(p.delimiters);
             } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
                 if (p.schema) {
-                    if (p.raw && p.schema->contains("type") && p.schema->at("type").is_string() && p.schema->at("type") == "string") {
-                        // TODO: Implement more comprehensive grammar generation for raw strings.
-                        // For now, use the grammar emitted from the underlying parser.
+                    if (p.raw && p.schema->contains("type")) {
+                        const auto & type_val = p.schema->at("type");
+                        if (type_val.is_string() && type_val == "string") {
+                            // TODO: Implement more comprehensive grammar generation for raw strings.
+                            // For now, use the grammar emitted from the underlying parser.
+                            return to_gbnf(p.child);
+                        }
+                        if (type_val.is_array()) {
+                            for (const auto & t : type_val) {
+                                if (t.is_string() && t.template get<std::string>() != "null") {
+                                    if (t.template get<std::string>() == "string") {
+                                        return to_gbnf(p.child);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if (p.raw && !p.schema->contains("type") && p.schema->contains("enum")) {
                         return to_gbnf(p.child);
                     }
                     return builder.add_schema(p.name, *p.schema);
