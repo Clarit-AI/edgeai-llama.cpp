@@ -186,78 +186,78 @@ static bool rknpu_trace_discriminator_enabled() {
 }
 
 static bool rknpu_disable_b_cache() {
-    const char * value = getenv("RKNPU_DISABLE_B_CACHE");
-    return value && value[0] != '\0' && strcmp(value, "0") != 0;
+    static const bool value = []{ const char * v = getenv("RKNPU_DISABLE_B_CACHE"); return v && v[0] != '\0' && strcmp(v, "0") != 0; }();
+    return value;
 }
 
 static bool rknpu_disable_ac_cache() {
-    const char * value = getenv("RKNPU_DISABLE_AC_CACHE");
-    return value && value[0] != '\0' && strcmp(value, "0") != 0;
+    static const bool value = []{ const char * v = getenv("RKNPU_DISABLE_AC_CACHE"); return v && v[0] != '\0' && strcmp(v, "0") != 0; }();
+    return value;
 }
 
 static bool rknpu_disable_c_cache() {
-    const char * value = getenv("RKNPU_DISABLE_C_CACHE");
-    return value && value[0] != '\0' && strcmp(value, "0") != 0;
+    static const bool value = []{ const char * v = getenv("RKNPU_DISABLE_C_CACHE"); return v && v[0] != '\0' && strcmp(v, "0") != 0; }();
+    return value;
 }
 
 static bool rknpu_disable_matmul_ctx_cache() {
-    const char * value = getenv("RKNPU_DISABLE_MATMUL_CTX_CACHE");
-    return value && value[0] != '\0' && strcmp(value, "0") != 0;
+    static const bool value = []{ const char * v = getenv("RKNPU_DISABLE_MATMUL_CTX_CACHE"); return v && v[0] != '\0' && strcmp(v, "0") != 0; }();
+    return value;
 }
 
 static bool rknpu_clear_caches_after_op() {
-    const char * value = getenv("RKNPU_CLEAR_CACHES_AFTER_OP");
-    return value && value[0] != '\0' && strcmp(value, "0") != 0;
+    static const bool value = []{ const char * v = getenv("RKNPU_CLEAR_CACHES_AFTER_OP"); return v && v[0] != '\0' && strcmp(v, "0") != 0; }();
+    return value;
 }
 
 static bool rknpu_clear_caches_after_graph() {
-    const char * value = getenv("RKNPU_CLEAR_CACHES_AFTER_GRAPH");
-    return value && value[0] != '\0' && strcmp(value, "0") != 0;
+    static const bool value = []{ const char * v = getenv("RKNPU_CLEAR_CACHES_AFTER_GRAPH"); return v && v[0] != '\0' && strcmp(v, "0") != 0; }();
+    return value;
 }
 
 static bool rknpu_clear_b_cache_after_op() {
-    const char * value = getenv("RKNPU_CLEAR_B_CACHE_AFTER_OP");
-    return value && value[0] != '\0' && strcmp(value, "0") != 0;
+    static const bool value = []{ const char * v = getenv("RKNPU_CLEAR_B_CACHE_AFTER_OP"); return v && v[0] != '\0' && strcmp(v, "0") != 0; }();
+    return value;
 }
 
 static bool rknpu_clear_c_cache_after_op() {
-    const char * value = getenv("RKNPU_CLEAR_C_CACHE_AFTER_OP");
-    return value && value[0] != '\0' && strcmp(value, "0") != 0;
+    static const bool value = []{ const char * v = getenv("RKNPU_CLEAR_C_CACHE_AFTER_OP"); return v && v[0] != '\0' && strcmp(v, "0") != 0; }();
+    return value;
 }
 
 static bool rknpu_clear_a_cache_after_op() {
-    const char * value = getenv("RKNPU_CLEAR_A_CACHE_AFTER_OP");
-    return value && value[0] != '\0' && strcmp(value, "0") != 0;
+    static const bool value = []{ const char * v = getenv("RKNPU_CLEAR_A_CACHE_AFTER_OP"); return v && v[0] != '\0' && strcmp(v, "0") != 0; }();
+    return value;
 }
 
 static bool rknpu_clear_matmul_ctx_cache_after_op() {
-    const char * value = getenv("RKNPU_CLEAR_MATMUL_CTX_CACHE_AFTER_OP");
-    return value && value[0] != '\0' && strcmp(value, "0") != 0;
+    static const bool value = []{ const char * v = getenv("RKNPU_CLEAR_MATMUL_CTX_CACHE_AFTER_OP"); return v && v[0] != '\0' && strcmp(v, "0") != 0; }();
+    return value;
 }
 
 static bool rknpu_drop_local_refs_before_clear() {
-    const char * value = getenv("RKNPU_DROP_LOCAL_REFS_BEFORE_CLEAR");
-    return value && value[0] != '\0' && strcmp(value, "0") != 0;
+    static const bool value = []{ const char * v = getenv("RKNPU_DROP_LOCAL_REFS_BEFORE_CLEAR"); return v && v[0] != '\0' && strcmp(v, "0") != 0; }();
+    return value;
 }
 
 static bool rknpu_trace_progress() {
-    const char * value = getenv("RKNPU_TRACE_PROGRESS");
-    return value && value[0] != '\0' && strcmp(value, "0") != 0;
+    static const bool value = []{ const char * v = getenv("RKNPU_TRACE_PROGRESS"); return v && v[0] != '\0' && strcmp(v, "0") != 0; }();
+    return value;
 }
 
 static bool rknpu_b_use_fd_import() {
-    const char * value = getenv("RKNPU_B_ALLOC_MODE");
-    return value && strcmp(value, "fd") == 0;
+    static const bool value = []{ const char * v = getenv("RKNPU_B_ALLOC_MODE"); return v && strcmp(v, "fd") == 0; }();
+    return value;
 }
 
 static bool rknpu_serial_b_segments() {
-    const char * value = getenv("RKNPU_SERIAL_B_SEGMENTS");
-    return value && value[0] != '\0' && strcmp(value, "0") != 0;
+    static const bool value = []{ const char * v = getenv("RKNPU_SERIAL_B_SEGMENTS"); return v && v[0] != '\0' && strcmp(v, "0") != 0; }();
+    return value;
 }
 
 static bool rknpu_trace_dma_usage() {
-    const char * value = getenv("RKNPU_TRACE_DMA");
-    return value && value[0] != '\0' && strcmp(value, "0") != 0;
+    static const bool value = []{ const char * v = getenv("RKNPU_TRACE_DMA"); return v && v[0] != '\0' && strcmp(v, "0") != 0; }();
+    return value;
 }
 
 static int8_t rknpu_read_native_int8_b(
@@ -571,6 +571,7 @@ struct ggml_backend_rknpu_context {
 
         const bool disable_b_cache = rknpu_disable_b_cache();
         if (!disable_b_cache) {
+            std::lock_guard<std::mutex> lock(mutex);
             if (auto * cached = b_mem_handle_cache.find(key)) {
                 return *cached;
             }
@@ -593,6 +594,7 @@ struct ggml_backend_rknpu_context {
 
         std::shared_ptr<rknn_tensor_mem> mem_shared(mem, deleter);
         if (!disable_b_cache) {
+            std::lock_guard<std::mutex> lock(mutex);
             b_mem_handle_cache.insert(key, mem_shared);
         }
         return mem_shared;
@@ -903,8 +905,8 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
     static std::mutex debug_mutex;
     static std::unordered_set<std::string> debug_logged_contracts;
     static std::unordered_set<std::string> debug_logged_numeric;
-    static size_t c_buffer_total_bytes = 0;  // cumulative C-buffer DMA across this process
-    static int    npu_op_counter       = 0;  // counts NPU ops across graph_compute calls
+    size_t c_buffer_total_bytes = 0;  // cumulative C-buffer DMA for this graph
+    int    npu_op_counter       = 0;  // counts NPU ops within this graph_compute call
 
     // Getting the current device configuration once
     const auto& config = rknpu2_configuration::Rknpu2ConfigManager::get_instance().get_current_config();
