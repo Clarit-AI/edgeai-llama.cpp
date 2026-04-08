@@ -492,6 +492,7 @@ All manifests pass with HTTP 200 on both request 1 and request 2.
 
 ---
 
+<<<<<<< HEAD
 ## Session 6: On-the-Fly B-Matrix Packing
 
 **Date**: 2026-04-07
@@ -600,3 +601,31 @@ Net savings: ~640 MiB heap for 32-tensor manifests.
 | `dense-q8-tail-down-plus-ffn-down-full` | 32 | `--cache-ram 8192` | **10/10 PASS** |
 
 All 40 requests returned HTTP 200 with correct token counts and coherent output. No errors in server logs. The 32-tensor manifest shows ~0.67 t/s generation due to most ops falling to CPU (compute buffer too small for all layers).
+
+## PR #7 Code Review Rounds (2026-04-08)
+
+PR: `Clarit-AI/Synapse#7` branch `feat/rknpu-otf-packing`
+
+Three rounds of review with all findings addressed. Key bugs caught:
+
+### Round 1 (`5edfb336`)
+- F16 dequant wrote to wrong buffer variable (dst_row vs raw_row)
+- FP16 pipeline crashed accessing non-existent quantized scales
+- Cache key collision: same-sized segments of same tensor mapped to identical keys (added n_offset as 5th tuple field)
+- packed_b_cpu_cache not evicted when B-mem handles cleared
+
+### Round 2 (`884b4214`)
+- Static counters accumulated across process lifetime instead of resetting per-graph
+- get_b_mem_from_packed accessed shared LRU cache without mutex
+- getenv() called on every invocation of 14 env-var helpers (now cached via `static const bool` lambda-init)
+
+### Round 3 (`695c9cc4`)
+- **packed_data pointer invalidation bug**: `&it->second` from `std::unordered_map` stored as raw pointer under mutex, then dereferenced after unlock. Concurrent `insert()` could trigger rehash, invalidating the pointer. Fixed by copying the vector while locked (value semantics).
+- packed_b_cpu_cache not cleared on per-op full-clear path (only cleared when `clear_b=true`)
+- "phase3" → "Phase 3" capitalization
+
+### Deliberately skipped (all rounds)
+- `pack_B_rk3588_int8` K-chunked layout: confirmed CORRECT — the NPU expects chunk-major order where each K-chunk of 8192 elements packs all N-rows before the next K-chunk. This is NOT the same as row-major layout.
+- `full_npu_matrix` allocation optimization: correct observation but risky refactor for a nitpick
+- INT4 OTF packing support: no INT4 tensors currently flow through the OTF path
+- Buffer-context registry for `clear_runtime_caches()`: overengineered for current use case
