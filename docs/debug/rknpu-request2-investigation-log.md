@@ -116,7 +116,7 @@ These tests use `llama-cli` and do not exercise the multi-turn path. They valida
 
 | # | Manifest | Pipeline | Result | Notes |
 |---|----------|----------|--------|-------|
-| 1 | `dense-q8-tail-down` (4 tensors / 100 MiB) | INT8_STANDARD | PASS | Baseline from phase3 findings |
+| 1 | `dense-q8-tail-down` (4 tensors / 100 MiB) | INT8_STANDARD | PASS | Baseline from Phase 3 findings |
 | 2 | `dense-q8-late-ffn` (24 tensors / 605 MiB) | INT8_STANDARD | FAIL | `GGML_ASSERT(quantized_scale not found)` -- broader tensor set triggers scale bookkeeping bug |
 | 3 | `dense-balanced` (108 tensors / 2725 MiB) | mixed | PARTIAL | Completes but with RKNN fd-to-handle errors in log |
 
@@ -221,7 +221,7 @@ if (!src0->buffer || src0->buffer->buft != ggml_backend_rknpu_buffer_type()) {
 
 Root cause: system-heap-backed DMA buffers for large model allocations may have fd/import limitations in the RKNN runtime on this kernel version.
 
-Status: Known from phase3. Not blocking for small manifests but limits scalability.
+Status: Known from Phase 3. Not blocking for small manifests but limits scalability.
 
 ### 3. llama-server Not Built
 

@@ -1034,16 +1034,18 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
 
                 // Look up or create packed B data for this segment
                 auto packed_key = std::make_tuple((const void *)src0->data, n_offset);
-                std::vector<uint8_t> * packed_data = nullptr;
+                std::vector<uint8_t> packed_data;
+                bool was_cached = false;
                 {
                     std::lock_guard<std::mutex> lock(src0_buf_ctx->mutex);
                     auto it = src0_buf_ctx->packed_b_cpu_cache.find(packed_key);
                     if (it != src0_buf_ctx->packed_b_cpu_cache.end()) {
-                        packed_data = &it->second;
+                        packed_data = it->second;  // copy while locked — iterator may invalidate on concurrent insert
+                        was_cached = true;
                     }
                 }
 
-                if (!packed_data) {
+                if (!was_cached) {
                     // Pack on-the-fly from original data in DMA buffer
                     auto packed = pack_b_segment_from_original(
                         src0, src0_buf_ctx,
@@ -1052,20 +1054,19 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
                         pipeline, config);
                     {
                         std::lock_guard<std::mutex> lock(src0_buf_ctx->mutex);
-                        auto & entry = src0_buf_ctx->packed_b_cpu_cache[packed_key];
-                        entry = std::move(packed);
-                        packed_data = &entry;
+                        src0_buf_ctx->packed_b_cpu_cache[packed_key] = packed;
                     }
+                    packed_data = std::move(packed);
                     if (rknpu_trace_dma_usage()) {
                         fprintf(stderr, "RKNPU_DMA otf_pack tensor=%s seg=%d offset_n=%d size_n=%d packed_bytes=%zu\n",
-                                src0->name, (int)idx, n_offset, n_segment, packed_data->size());
+                                src0->name, (int)idx, n_offset, n_segment, packed_data.size());
                     }
                 }
 
                 // Create RKNN memory handle from packed data
                 mem_B_segments[idx] = backend_ctx->get_b_mem_from_packed(
                     matmul_ctx,
-                    *packed_data,
+                    packed_data,
                     segment_size_bytes,
                     src0,
                     n_offset);
@@ -1086,7 +1087,7 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
 
                 // Store offsets for serial path (used for B-mem cache key only)
                 active_segment_total_offsets[idx] = 0; // not used for DMA offset anymore
-                active_segment_expected_bytes[idx] = packed_data->size();
+                active_segment_expected_bytes[idx] = packed_data.size();
             }
         }
 
@@ -1591,11 +1592,16 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
 
             if (!clear_matmul && !clear_b && !clear_c && !clear_a) {
                 backend_ctx->clear_runtime_caches();
+                // Full clear also evicts per-buffer packed B caches
+                {
+                    std::lock_guard<std::mutex> lock(src0_buf_ctx->mutex);
+                    src0_buf_ctx->packed_b_cpu_cache.clear();
+                }
             } else {
                 backend_ctx->clear_runtime_caches_selective(clear_matmul, clear_b, clear_a, clear_c);
             }
 
-            // Also evict per-buffer packed B caches when B handles are cleared,
+            // Also evict per-buffer packed B caches when B handles are selectively cleared,
             // so stale packed data doesn't outlive its RKNN memory handles.
             if (clear_b) {
                 std::lock_guard<std::mutex> lock(src0_buf_ctx->mutex);
