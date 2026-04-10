@@ -143,6 +143,7 @@ enum projector_type {
     PROJECTOR_TYPE_QWEN2VL,
     PROJECTOR_TYPE_QWEN3VL,
     PROJECTOR_TYPE_GEMMA3,
+    PROJECTOR_TYPE_GEMMA4,
     PROJECTOR_TYPE_IDEFICS3,
     PROJECTOR_TYPE_PIXTRAL,
     PROJECTOR_TYPE_QWEN25VL,
@@ -171,6 +172,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_QWEN25VL,  "qwen2.5vl_merger"},
     { PROJECTOR_TYPE_QWEN3VL,   "qwen3vl_merger"},
     { PROJECTOR_TYPE_GEMMA3,    "gemma3"},
+    { PROJECTOR_TYPE_GEMMA4,    "gemma4v"},
     { PROJECTOR_TYPE_IDEFICS3,  "idefics3"},
     { PROJECTOR_TYPE_PIXTRAL,   "pixtral"},
     { PROJECTOR_TYPE_ULTRAVOX,  "ultravox"},
@@ -188,6 +190,9 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {
+    if (str == "gemma4") {
+        return PROJECTOR_TYPE_GEMMA4;
+    }
     for (const auto & pair : PROJECTOR_TYPE_NAMES) {
         if (pair.second == str) {
             return pair.first;
@@ -389,7 +394,7 @@ static std::string gguf_data_to_str(enum gguf_type type, const void * data, int 
         case GGUF_TYPE_INT64:   return std::to_string(((const int64_t  *)data)[i]);
         case GGUF_TYPE_FLOAT32: return std::to_string(((const float    *)data)[i]);
         case GGUF_TYPE_FLOAT64: return std::to_string(((const double   *)data)[i]);
-        case GGUF_TYPE_BOOL:    return ((const bool *)data)[i] ? "true" : "false";
+        case GGUF_TYPE_BOOL:    return ((const int8_t *)data)[i] != 0 ? "true" : "false";
         default:                return string_format("unknown type %d", type);
     }
 }

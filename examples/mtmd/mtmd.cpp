@@ -260,7 +260,7 @@ struct mtmd_context {
         }
 
         // set boi/eoi
-        if (proj == PROJECTOR_TYPE_GEMMA3) {
+        if (proj == PROJECTOR_TYPE_GEMMA3 || proj == PROJECTOR_TYPE_GEMMA4) {
             // <start_of_image> ... (image embeddings) ... <end_of_image>
             img_beg = "<start_of_image>";
             img_end = "<end_of_image>";
@@ -831,8 +831,11 @@ float * mtmd_get_output_embd(mtmd_context * ctx) {
 }
 
 bool mtmd_decode_use_non_causal(mtmd_context * ctx) {
-    if (ctx->ctx_v && clip_get_projector_type(ctx->ctx_v) == PROJECTOR_TYPE_GEMMA3) {
-        return true;
+    if (ctx->ctx_v) {
+        const auto proj = clip_get_projector_type(ctx->ctx_v);
+        if (proj == PROJECTOR_TYPE_GEMMA3 || proj == PROJECTOR_TYPE_GEMMA4) {
+            return true;
+        }
     }
     return false;
 }

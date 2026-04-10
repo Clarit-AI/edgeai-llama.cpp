@@ -582,7 +582,7 @@ struct clip_graph {
                                 learned_pos_embd,
                                 nullptr);
 
-        if (ctx->proj_type() == PROJECTOR_TYPE_GEMMA3) {
+        if (ctx->proj_type() == PROJECTOR_TYPE_GEMMA3 || ctx->proj_type() == PROJECTOR_TYPE_GEMMA4) {
             const int batch_size = 1;
             GGML_ASSERT(n_patches_x == n_patches_y);
             const int patches_per_image = n_patches_x;
@@ -2639,6 +2639,7 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
 
     switch (ctx->proj_type()) {
         case PROJECTOR_TYPE_GEMMA3:
+        case PROJECTOR_TYPE_GEMMA4:
         case PROJECTOR_TYPE_IDEFICS3:
         case PROJECTOR_TYPE_LFM2:
             {
@@ -2994,6 +2995,7 @@ struct clip_model_loader {
                         hparams.set_warmup_n_tokens(256); // avoid OOM on warmup
                     } break;
                 case PROJECTOR_TYPE_GEMMA3:
+                case PROJECTOR_TYPE_GEMMA4:
                     {
                         // default value (used by all model sizes in gemma 3 family)
                         // number of patches for each **side** is reduced by a factor of 4
@@ -3192,6 +3194,7 @@ struct clip_model_loader {
                     || model.proj_type == PROJECTOR_TYPE_QWEN25VL
                     || model.proj_type == PROJECTOR_TYPE_GLM_EDGE
                     || model.proj_type == PROJECTOR_TYPE_GEMMA3
+                    || model.proj_type == PROJECTOR_TYPE_GEMMA4
                     || model.proj_type == PROJECTOR_TYPE_IDEFICS3
                     || model.proj_type == PROJECTOR_TYPE_MINICPMV
                 ) && layer.ff_up_w && layer.ff_down_w && layer.ff_down_w->ne[0] == hparams.n_embd;
@@ -3323,6 +3326,7 @@ struct clip_model_loader {
                     model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
                 } break;
             case PROJECTOR_TYPE_GEMMA3:
+            case PROJECTOR_TYPE_GEMMA4:
                 {
                     model.mm_input_proj_w = get_tensor(TN_MM_INP_PROJ);
                     model.mm_soft_emb_norm_w = get_tensor(TN_MM_SOFT_EMB_N);
@@ -4483,6 +4487,7 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
 
         case PROJECTOR_TYPE_GLM_EDGE:
         case PROJECTOR_TYPE_GEMMA3:
+        case PROJECTOR_TYPE_GEMMA4:
         case PROJECTOR_TYPE_INTERNVL: // TODO @ngxson : support dynamic resolution
             {
                 clip_image_u8 resized_image;
@@ -4746,6 +4751,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                 n_patches = x_patch * y_patch;
             } break;
         case PROJECTOR_TYPE_GEMMA3:
+        case PROJECTOR_TYPE_GEMMA4:
         case PROJECTOR_TYPE_IDEFICS3:
         case PROJECTOR_TYPE_INTERNVL:
         case PROJECTOR_TYPE_LLAMA4:
@@ -5205,6 +5211,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 set_input_i32("patches", patches);
             } break;
         case PROJECTOR_TYPE_GEMMA3:
+        case PROJECTOR_TYPE_GEMMA4:
         case PROJECTOR_TYPE_IDEFICS3:
         case PROJECTOR_TYPE_INTERNVL:
         case PROJECTOR_TYPE_QWEN2A:
@@ -5299,6 +5306,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             // main path + deepstack paths
             return ctx->model.mm_1_b->ne[0] * (1 + ctx->model.n_deepstack_layers);
         case PROJECTOR_TYPE_GEMMA3:
+        case PROJECTOR_TYPE_GEMMA4:
             return ctx->model.mm_input_proj_w->ne[0];
         case PROJECTOR_TYPE_IDEFICS3:
             return ctx->model.projection->ne[1];
